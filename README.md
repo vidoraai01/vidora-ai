@@ -60,3 +60,8 @@ The easiest phone-only path is to put this project in a GitHub repository, then 
 - Hosting plans differ in CPU, memory, request duration, disk persistence, bandwidth and sleeping behavior. Large media files may fail on low-resource plans. Start with short clips and a 100 MB upload cap.
 - Before accepting public users, add authentication, per-user quotas, durable private object storage, a persistent queue, isolated processing workers, file-signature validation, malware scanning, stronger resource limits and privacy/retention controls.
 - Processing media does not establish ownership or permission, and does not bypass Content ID or guarantee that a video will be claim-free.
+
+## Audio fingerprint comparison
+The Audio Fingerprint Analysis panel accepts two audio files and generates acoustic fingerprints with Chromaprint (`fpcalc`). It aligns the fingerprint sequences and reports an approximate similarity score. The Docker image installs `libchromaprint-tools` to provide `fpcalc`.
+
+This is a comparison of the two uploaded files only. It does not query a global music/copyright database and must not be presented as a copyright clearance or infringement verdict. Uploaded comparison files are deleted after analysis.

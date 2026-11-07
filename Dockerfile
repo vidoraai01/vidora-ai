@@ -8,7 +8,7 @@ ENV NODE_ENV=production \
 
 # Install FFmpeg/FFprobe and remove package-manager cache.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg libchromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -15,6 +15,7 @@ const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 500);
 const RETENTION_HOURS = Number(process.env.RETENTION_HOURS || 2);
 const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg';
 const FFPROBE = process.env.FFPROBE_PATH || 'ffprobe';
+const FPCALC = process.env.FPCALC_PATH || 'fpcalc';
 const ROOT = path.join(os.tmpdir(), 'vidora-ai');
 const IN_DIR = path.join(ROOT, 'input');
 const OUT_DIR = path.join(ROOT, 'output');
@@ -45,6 +46,49 @@ const upload = multer({
     cb(null, true);
   }
 });
+
+const audioUpload = multer({
+  dest: IN_DIR,
+  limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024, files: 2 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    if (!['.mp3','.wav','.m4a','.aac','.ogg','.flac'].includes(ext)) return cb(new Error('Fingerprint analysis accepts audio files only (MP3, WAV, M4A, AAC, OGG, FLAC).'));
+    cb(null, true);
+  }
+});
+function getFingerprint(file) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(FPCALC, ['-json', '-length', '120', file], { stdio: ['ignore','pipe','pipe'] });
+    let out = '', err = '';
+    child.stdout.on('data', chunk => { out = (out + chunk.toString()).slice(-2_000_000); });
+    child.stderr.on('data', chunk => { err = (err + chunk.toString()).slice(-4000); });
+    child.on('error', e => reject(new Error(e.code === 'ENOENT' ? 'Audio fingerprint engine is not installed on this server.' : e.message)));
+    child.on('close', code => {
+      if (code !== 0) return reject(new Error(err || 'Could not generate an audio fingerprint.'));
+      try {
+        const data = JSON.parse(out);
+        const values = String(data.fingerprint || '').split(',').filter(Boolean).map(v => Number(v) >>> 0);
+        if (!values.length) throw new Error('The audio is too short or could not be fingerprinted.');
+        resolve({ duration: Number(data.duration || 0), values });
+      } catch (e) { reject(e); }
+    });
+  });
+}
+function compareFingerprints(a, b) {
+  const bitCount = n => { n >>>= 0; n = n - ((n >>> 1) & 0x55555555); n = (n & 0x33333333) + ((n >>> 2) & 0x33333333); return (((n + (n >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24; };
+  let best = { score: 0, offset: 0, compared: 0 };
+  const maxOffset = Math.min(60, Math.max(a.length, b.length) - 1);
+  for (let offset = -maxOffset; offset <= maxOffset; offset++) {
+    const startA = Math.max(0, offset), startB = Math.max(0, -offset);
+    const count = Math.min(a.length - startA, b.length - startB);
+    if (count < 8) continue;
+    let bits = 0;
+    for (let i = 0; i < count; i++) bits += 32 - bitCount(a[startA + i] ^ b[startB + i]);
+    const score = bits / (count * 32) * 100;
+    if (score > best.score) best = { score, offset, compared: count };
+  }
+  return best;
+}
 
 function run(command, args, timeoutMs = 30 * 60 * 1000) {
   return new Promise((resolve, reject) => {
@@ -114,6 +158,22 @@ function buildArgs(input, output, body, info) {
 }
 
 app.get('/api/health', (_req,res) => res.json({ ok:true, service:'Vidora AI processing API' }));
+app.post('/api/audio-fingerprint', audioUpload.fields([{ name:'referenceAudio', maxCount:1 },{ name:'checkAudio', maxCount:1 }]), async (req,res) => {
+  const files = req.files || {};
+  const reference = files.referenceAudio?.[0], check = files.checkAudio?.[0];
+  if (!reference || !check) {
+    if (reference) safeDelete(reference.path); if (check) safeDelete(check.path);
+    return res.status(400).json({ error:'Upload both the reference audio and the audio you want to check.' });
+  }
+  try {
+    const [refFp, checkFp] = await Promise.all([getFingerprint(reference.path), getFingerprint(check.path)]);
+    const comparison = compareFingerprints(refFp.values, checkFp.values);
+    const score = Number(comparison.score.toFixed(1));
+    const result = score >= 90 ? 'Very high similarity' : score >= 75 ? 'High similarity' : score >= 60 ? 'Moderate similarity' : 'Low similarity';
+    res.json({ ok:true, analysis:{ referenceDuration:Number(refFp.duration.toFixed(1)), checkDuration:Number(checkFp.duration.toFixed(1)), referenceFingerprintLength:refFp.values.length, checkFingerprintLength:checkFp.values.length, similarity:score, result, comparedSegments:comparison.compared, alignmentOffset:comparison.offset, engine:'Chromaprint' }, notice:'This compares acoustic fingerprints of the two uploaded files. It does not search a global copyright database and is not a copyright clearance or infringement decision.' });
+  } catch (e) { res.status(500).json({ error:e.message || 'Fingerprint analysis failed.' }); }
+  finally { safeDelete(reference.path); safeDelete(check.path); }
+});
 app.post('/api/jobs', upload.single('media'), async (req,res) => {
   if (req.body.rightsConfirmed !== 'true') { if (req.file) safeDelete(req.file.path); return res.status(400).json({ error:'Confirm that you have permission to process this media.' }); }
   if (!req.file) return res.status(400).json({ error:'Choose a media file first.' });
