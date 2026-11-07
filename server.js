@@ -58,7 +58,7 @@ const audioUpload = multer({
 });
 function getFingerprint(file) {
   return new Promise((resolve, reject) => {
-    const child = spawn(FPCALC, ['-json', '-length', '120', file], { stdio: ['ignore','pipe','pipe'] });
+    const child = spawn(FPCALC, ['-json', '-raw', '-length', '120', file], { stdio: ['ignore','pipe','pipe'] });
     let out = '', err = '';
     child.stdout.on('data', chunk => { out = (out + chunk.toString()).slice(-2_000_000); });
     child.stderr.on('data', chunk => { err = (err + chunk.toString()).slice(-4000); });
