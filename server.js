@@ -157,7 +157,12 @@ function buildArgs(input, output, body, info) {
   return args;
 }
 
-app.get('/api/health', (_req,res) => res.json({ ok:true, service:'Vidora AI processing API' }));
+app.get('/health', (_req, res) => {
+  res.status(200).json({
+    ok: true,
+    service: 'Vidora AI'
+  });
+});
 app.post('/api/audio-fingerprint', audioUpload.fields([{ name:'referenceAudio', maxCount:1 },{ name:'checkAudio', maxCount:1 }]), async (req,res) => {
   const files = req.files || {};
   const reference = files.referenceAudio?.[0], check = files.checkAudio?.[0];
