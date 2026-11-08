@@ -221,4 +221,6 @@ app.use((err,_req,res,_next) => {
   const status = err instanceof multer.MulterError ? (err.code === 'LIMIT_FILE_SIZE' ? 413 : 400) : 400;
   res.status(status).json({ error: err.message || 'Upload failed.' });
 });
-app.listen(PORT, () => console.log(`Vidora AI API running at http://localhost:${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Vidora AI running on port ${PORT}`);
+});
