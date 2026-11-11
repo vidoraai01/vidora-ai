@@ -1,15 +1,28 @@
 {
   "name": "vidora-ai",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "private": true,
-  "description": "Vidora AI media processing web app",
+  "description": "Vidora AI multi-studio media processing application",
   "main": "server.js",
-  "scripts": { "start": "node server.js", "dev": "node --watch server.js" },
-  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "check": "node --check server.js && node --check auth-support.js && node --check public/assets/app.js && node --check runway-video-provider.js && node --check auto-edit-renderer.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20.11"
+  },
   "dependencies": {
+    "@google/genai": "^3.0.0",
+    "bcryptjs": "^3.0.3",
+    "connect-pg-simple": "^10.0.0",
+    "dotenv": "^18.0.9",
     "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "express-session": "^1.19.0",
     "helmet": "^8.0.0",
     "multer": "^1.4.5-lts.1",
-    "express-rate-limit": "^7.5.0"
+    "pg": "^8.23.1"
   }
 }

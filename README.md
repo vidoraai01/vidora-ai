@@ -1,67 +1,96 @@
-# Vidora AI — Processing beta
+# Vidora AI — Multi-Studio Media Workspace
 
-Responsive dark/cyan media workspace with a Node.js API and FFmpeg processing backend.
+A five-page media workflow built with Node.js/Express, PostgreSQL sessions, FFmpeg/FFprobe, Chromaprint and optional Gemini vision analysis. The application is designed around three studios: Video, Photo and Audio.
 
-## Features implemented
-- Responsive browser UI with local preview and drag/drop upload.
-- Real multipart upload to `POST /api/jobs`.
-- FFprobe inspection before processing.
-- FFmpeg export: MP4 (H.264/AAC), MOV, WEBM (VP9/Opus), MP3 and WAV.
-- Compression quality presets, resize up to 1080p/720p/480p, audio extraction, loudness normalization and clip trimming.
-- Job status polling, downloadable export, job deletion endpoint.
-- Upload size cap, extension allowlist, rate limiting, Helmet headers, random job IDs, private temporary directories and automatic expiry cleanup.
+## Included workflow
 
-## Run locally
-Requirements: Node.js 20+ and FFmpeg + FFprobe installed and available on PATH.
+1. **Account** — sign in, create an account, request a time-limited password-reset email, or continue as a browse-only guest. Authentication uses a browser-session cookie (no persistent Max-Age) and best-effort logout when the page is left.
+2. **Upload** — select one supported media file, review the media limits and confirm permission to process it.
+3. **AI Tools** — choose from 9 Video Studio tools, 1 Photo Studio tool and 2 Audio Studio tools. Fingerprint tools reveal the second upload only after selection.
+4. **Processing** — a dedicated animated holographic brain view, actual upload progress, FFmpeg job progress where available, elapsed time and a progress-derived remaining-time estimate.
+5. **Results** — download the processed output or a technical JSON report. Fingerprint reports return to Upload; there is no sixth page.
+
+Help is available from the header on every page. Feedback and suggestions are public immediately; bug reports remain private. Administrators can hide or delete public posts and manage report statuses. The administrator can review reports, update statuses, publish/hide approved feedback/suggestions and delete reports/comments. Bug reports cannot be made public.
+
+## Tool capability and honest limitations
+
+| Studio | Tool | Current implementation |
+|---|---|---|
+| Video | Video Enhance AI | Optional Gemini frame assessment recommends filter settings; FFmpeg performs the actual denoise/sharpen/colour render. This is AI-guided conventional enhancement, not a neural restoration model. |
+| Video | AI Video Analysis | Gemini-assisted sampled-frame analysis when a valid API key/model is available; otherwise returns an explicit local technical fallback. |
+| Video | AI Video Edit | Uses the AI edit/quality plan, then renders an MP4 with conservative visual enhancement and optional long-silence trimming. It does not yet apply semantic scene rearrangement, generative transitions or AI-selected clip assembly. |
+| AI Visual Change | Uses Runway Aleph 2 video-to-video editing for prompt-driven anime/cinematic restyling, background/environment changes and object/appearance edits. Requires `RUNWAYML_API_SECRET` and purchased provider credits. The source audio track is restored after the visual model finishes. Provider limits are 2–30 seconds, up to 1080p, 30 FPS or lower and 200 MB per clip; unsupported clips are rejected rather than silently truncated or downscaled. |
+| Video | Video Fingerprint Check | Perceptual frame hashes sampled at 1 frame/second, with approximate alignment and matching windows. Brief segments can be missed; this is not a copyright verdict. |
+| Video | Video Full Details | FFprobe metadata report. |
+| Video | AI Video Upscale | Lanczos interpolation to the selected output size. A neural AI upscaling model is not bundled. |
+| Video | Audio Extractor | MP3/WAV extraction. |
+| Video | Video Audio Enhance | FFmpeg noise reduction and loudness normalization while re-encoding the video/audio output. |
+| Photo | Photo Enhance AI | Gemini can assess a downscaled preview and recommend conventional denoise/sharpen/tone settings; FFmpeg applies the filters and exports PNG. Without Gemini it uses conservative local settings. No neural image-restoration model or generated image content is included. |
+| Audio | Audio Enhance AI | FFmpeg noise reduction and loudness normalization. It is conventional signal processing, not a neural speech model. |
+| Audio | Audio Fingerprint Check | Chromaprint acoustic fingerprint alignment and approximate similarity. It compares only the two supplied files, not a global music database. |
+
+The product labels are retained for the approved workflow, but the implementation distinctions above must remain visible to users. Do not market conventional filters/interpolation as neural AI.
+
+## Media limits
+
+- Generative AI Visual Change: provider limits of 2–30 seconds, up to 1080p, 30 FPS or lower and 200 MB per clip; requires Runway Dev API credits and `RUNWAYML_API_SECRET`. The regular upload limit remains 5 minutes / 250 MB for the other video tools.
+
+- Video: one file, maximum 250 MB and 5 minutes.
+- Audio: one file, maximum 50 MB and 30 minutes.
+- Photo: one image, maximum 25 MB.
+- Fingerprint comparison: the second file uses the same media type and per-file limits.
+
+The backend checks filename extension, file signature and FFprobe-detected streams before starting a job. The original upload is never overwritten. Files are placed in private temporary directories and cleaned up after the configured retention period.
+
+## Requirements
+
+- Node.js 20.11 or newer (for streaming provider uploads with `fs.openAsBlob`).
+- FFmpeg and FFprobe on `PATH` (or set `FFMPEG_PATH` and `FFPROBE_PATH`).
+- `fpcalc` / Chromaprint for audio fingerprint comparisons. The Dockerfile installs `libchromaprint-tools`.
+- PostgreSQL for account/session/community storage.
+- Optional Gemini API key for vision-assisted analysis and enhancement recommendations.
+- Optional Resend account/API key for password-reset email delivery.
+
+## Local setup
+
+1. Install Node.js 20+ and FFmpeg/FFprobe.
+2. Copy `.env.example` to `.env` and fill in the database and authentication values.
+3. Generate a random session secret (for example, `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`) and set `SESSION_SECRET`. Generate an administrator password hash using `bcryptjs` (cost 12) and set `ADMIN_PASSWORD_HASH`.
+4. In development, `TRUST_PROXY_HOPS` may be `0`. In production, set it to the **verified number of trusted ingress proxies**. Do not guess or use `true`.
+5. For password reset, configure `APP_BASE_URL`, `RESEND_API_KEY` and a verified `RESEND_FROM` address. Without these, the app will show the generic reset response but no email will be delivered.
+6. Install dependencies and run tests:
 
 ```bash
-npm install
-cp .env.example .env   # optional; edit values if needed
+npm ci
+npm test
+npm run check
 npm start
 ```
 
-Open http://localhost:3000. The frontend and API are served from the same origin. On Windows, install FFmpeg and add its `bin` directory to PATH, or set `FFMPEG_PATH` and `FFPROBE_PATH`.
+Open `http://localhost:3000`.
 
-## API
-- `GET /api/health` — health check.
-- `POST /api/jobs` — multipart form with `media`, `task`, `format`, `quality`, `resolution`; trim also accepts `startTime` and `duration`.
-- `GET /api/jobs/:id` — job state.
-- `GET /api/jobs/:id/download` — download completed export.
-- `DELETE /api/jobs/:id` — delete a job and its output.
+## Required environment variables
 
-Task values: `convert`, `compress`, `resize`, `extract-audio`, `normalize-audio`, `trim`.
-Format values: `mp4`, `mov`, `webm`, `mp3`, `wav`.
-Quality values: `balanced`, `high`, `small`. Resolution values: `original`, `1080p`, `720p`, `480p`.
+- `DATABASE_URL` — PostgreSQL connection string with certificate validation enabled.
+- `SESSION_SECRET` — at least 48 random characters.
+- `ADMIN_EMAIL` and `ADMIN_PASSWORD_HASH` — administrator login.
+- `TRUST_PROXY_HOPS` — explicitly set in production after verifying the hosting topology.
 
-## Important current limitations
-- Jobs are stored in an in-memory Map; restarting the server loses job status. This is a single-instance development implementation, not a production queue.
-- Media is written to local temporary disk. Cleanup runs every 10 minutes and expires completed/failed jobs after `RETENTION_HOURS` (default 2). Deployments need durable private object storage and lifecycle rules.
-- Upload validation uses extension allowlisting plus FFprobe parsing; production should add robust file-signature validation, malware scanning, per-user quotas/authentication, isolated worker containers, and stricter resource limits.
-- The consent checkbox is a user declaration, not proof of ownership or a legal determination.
-- No Content ID access, copyright bypass, or claim-free upload guarantee is provided. Processing a file does not grant rights to use it.
+Optional variables: `RUNWAYML_API_SECRET` (for generative AI Visual Change; separate from Gemini and credit-billed), `GEMINI_API_KEY`, `GEMINI_FALLBACK_MODEL`, `GEMINI_REQUEST_TIMEOUT_MS`, `RESEND_API_KEY`, `RESEND_FROM`, `APP_BASE_URL`, `MAX_UPLOAD_MB`, `RETENTION_HOURS`, `FFMPEG_PATH`, `FFPROBE_PATH`, `FPCALC_PATH`, `DB_POOL_MAX`, `DATABASE_SSL`.
 
-## Deploy from Android (Docker hosting)
+Never commit `.env`, API keys, database credentials, session secrets or password hashes. `.gitignore` and `.dockerignore` exclude secret files, backups and `node_modules`.
 
-The easiest phone-only path is to put this project in a GitHub repository, then connect that repository to a Docker-capable web host such as Render.
+## Deployment notes and limits
 
-1. Extract the ZIP on your Android phone.
-2. In your browser, create a GitHub repository (for example `vidora-ai`). Keep it private if you prefer.
-3. Upload the files from the `vidora-ai` project folder to the repository root: `index.html`, `server.js`, `package.json`, `Dockerfile`, `.dockerignore`, `README.md`, and `.env.example`. Do not upload `.env` or `node_modules`.
-4. In your hosting dashboard, create a new **Web Service** and connect the GitHub repository.
-5. Choose **Docker** as the runtime/environment. The included Dockerfile installs FFmpeg and FFprobe in the server container.
-6. Set the health-check path to `/api/health` if the host offers that setting. Set environment variables `MAX_UPLOAD_MB=100` and `RETENTION_HOURS=2` for a cautious first test. The Dockerfile already supplies defaults.
-7. Deploy. Open the service URL on your phone and test `/api/health`; it should return JSON with `ok: true`.
-8. Upload a short video you own or have permission to process. Try MP4 conversion first, then download the export.
+- The Docker image installs FFmpeg/FFprobe and Chromaprint and runs as the unprivileged `node` user. AI Visual Change uploads the selected short clip to Runway Dev using an ephemeral provider asset; the provider may bill credits for the transformation.
+- Set `TRUST_PROXY_HOPS` to the verified Enzonic ingress count before deploying. The app intentionally refuses to guess this in production; an incorrect setting can cause secure-cookie or rate-limit issues.
+- PostgreSQL must allow the deployment host and present a valid TLS certificate. Certificate verification is enabled by default; do not weaken TLS to silence a warning.
+- Job state and temporary media are currently held in process memory/local temporary disk. A restart or redeploy can lose active jobs and files. This build is single-instance and is not a durable distributed job queue.
+- Large/high-resolution renders are CPU- and memory-intensive. The backend detects the container memory limit and blocks 4K output below 1.5 GB and 8K below 4 GB to reduce the risk of killing the app. A 512 MB host is therefore not expected to process 4K/8K; use a larger dedicated worker for those outputs. 2K remains resource-intensive and is still subject to actual CPU/memory availability.
+- The browser upload progress is measured from actual transfer events (bytes, speed and network ETA). FFmpeg job progress is measured from FFmpeg's reported output time. Remaining-time values combine media metadata and observed render progress; they are estimates and can change with server load.
+- No malware-scanning service or isolated worker container is included. Do not accept untrusted public uploads until these controls and durable quotas/storage are added.
+- A media comparison score is not proof of ownership, infringement, or copyright clearance. No Content ID bypass or claim-free guarantee is provided.
 
-### Deployment limitations — read before public launch
+## Release checks
 
-- This is an MVP/demo deployment, not production-ready for public users.
-- Job state is held in memory and uploaded/exported media is stored in the container's temporary directory. A restart or redeploy can lose jobs and files. Do not add multiple instances until a persistent job queue and shared storage are implemented.
-- Hosting plans differ in CPU, memory, request duration, disk persistence, bandwidth and sleeping behavior. Large media files may fail on low-resource plans. Start with short clips and a 100 MB upload cap.
-- Before accepting public users, add authentication, per-user quotas, durable private object storage, a persistent queue, isolated processing workers, file-signature validation, malware scanning, stronger resource limits and privacy/retention controls.
-- Processing media does not establish ownership or permission, and does not bypass Content ID or guarantee that a video will be claim-free.
-
-## Audio fingerprint comparison
-The Audio Fingerprint Analysis panel accepts two audio files and generates acoustic fingerprints with Chromaprint (`fpcalc`). It aligns the fingerprint sequences and reports an approximate similarity score. The Docker image installs `libchromaprint-tools` to provide `fpcalc`.
-
-This is a comparison of the two uploaded files only. It does not query a global music/copyright database and must not be presented as a copyright clearance or infringement verdict. Uploaded comparison files are deleted after analysis.
+Run `npm test` and `npm run check` before packaging. The smoke tests verify the five-page structure, 12 tool entries, protected API routes, JavaScript syntax, required media binaries, FFmpeg visual presets, a mocked Runway upload/submit/poll/download flow and secret exclusions. They do not replace live PostgreSQL, Gemini, email-provider, browser-device or production-host testing.
