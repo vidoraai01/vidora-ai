@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
-const { createAutoEditRenderer } = require('../auto-edit-renderer');
+const { createAutoEditRenderer } = require('./auto-edit-renderer');
 
 function ffmpegRun(command, args, timeoutMs, _onProgress, _duration, onSpawn) {
   return new Promise((resolve, reject) => {
