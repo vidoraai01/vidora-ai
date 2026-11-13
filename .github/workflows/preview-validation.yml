@@ -25,6 +25,11 @@ jobs:
       - name: Check JavaScript syntax
         run: npm run check
 
+      - name: Install FFmpeg test dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
       - name: Run project tests
         run: npm test
 
