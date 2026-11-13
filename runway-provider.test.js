@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { transformVideoWithRunway } = require('../runway-video-provider');
+const { transformVideoWithRunway } = require('./runway-video-provider');
 
 test('Runway video-to-video adapter uploads, submits, polls and downloads a transformed MP4', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vidora-runway-test-'));
