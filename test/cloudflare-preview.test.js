@@ -11,6 +11,7 @@ test('Cloudflare Worker entry point exists and is configured', async () => {
   const config = JSON.parse(await read('wrangler.jsonc'));
   assert.equal(config.main, 'cloudflare/worker.js');
   assert.deepEqual(config.previews, {}, 'Cloudflare branch previews must be explicitly enabled');
+  assert.equal(config.preview_urls, true, 'Cloudflare Preview URLs must be explicitly enabled for visual review');
   assert.equal(config.preview_urls, true, 'preview URLs must be enabled for visual verification');
   assert.equal(config.assets.directory, './public');
   await fs.access(path.join(process.cwd(), config.main));
