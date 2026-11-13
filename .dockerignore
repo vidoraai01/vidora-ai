@@ -1,0 +1,20 @@
+# Never include credentials or local environment files in build context
+.env
+.env.*
+!.env.example
+
+# Dependencies and version-control metadata
+node_modules
+.git
+.github
+
+# Local logs, caches, and generated test/build output
+*.log
+npm-debug.log*
+coverage
+.wrangler
+.tmp
+temp
+tmp
+uploads
+outputs
