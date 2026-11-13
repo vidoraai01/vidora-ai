@@ -10,6 +10,8 @@ const read = file => fs.readFile(path.join(process.cwd(), file), 'utf8');
 test('Cloudflare Worker entry point exists and is configured', async () => {
   const config = JSON.parse(await read('wrangler.jsonc'));
   assert.equal(config.main, 'cloudflare/worker.js');
+  assert.deepEqual(config.previews, {}, 'Cloudflare Workers Builds Preview command requires a top-level previews block');
+  assert.equal(config.assets.directory, './public');
   await fs.access(path.join(process.cwd(), config.main));
 });
 
