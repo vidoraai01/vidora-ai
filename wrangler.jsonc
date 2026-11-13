@@ -11,5 +11,6 @@
       "/health"
     ]
   },
-  "previews": {}
+  "previews": {},
+  "preview_urls": true
 }
