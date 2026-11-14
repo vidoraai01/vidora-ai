@@ -94,7 +94,7 @@ test('AI Video Edit chains analysis into an actual render and Visual Change pres
 });
 
 test('JavaScript source parses', () => {
-  for (const file of ['server.js','auth-support.js','public/assets/app.js','runway-video-provider.js','auto-edit-renderer.js']) {
+  for (const file of ['server.js','auth-support.js','public/assets/app.js','runway-video-provider.js','free-video-provider.js','auto-edit-renderer.js']) {
     const r=spawnSync(process.execPath,['--check',path.join(root,file)],{encoding:'utf8'});
     assert.equal(r.status,0,`${file}: ${r.stderr}`);
   }
