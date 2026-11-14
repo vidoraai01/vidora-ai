@@ -25,7 +25,7 @@ const configuredUploadLimit = Number(process.env.MAX_UPLOAD_MB || 250);
 const MAX_UPLOAD_MB = Number.isFinite(configuredUploadLimit) ? Math.min(250, Math.max(1, configuredUploadLimit)) : 250;
 const MAX_AUDIO_MB = 50;
 const MAX_PHOTO_MB = 25;
-const MAX_VIDEO_SECONDS = 300;
+const MAX_VIDEO_SECONDS = Math.max(5, Math.min(300, Number(process.env.MAX_VIDEO_SECONDS) || 300));
 const MAX_AUDIO_SECONDS = 1800;
 const RETENTION_HOURS = Number(process.env.RETENTION_HOURS || 2);
 const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg';
@@ -264,7 +264,7 @@ async function validateMedia(file, expected, maxDuration) {
   if (expected === 'photo' && (!PHOTO_EXT.has(ext) || !hasImage || hasAudio)) throw new Error('Please upload a valid photo image.');
   if (expected === 'photo') { const imageStream=streams.find(x=>x.codec_type==='video'); if(Number(imageStream?.width||0)*Number(imageStream?.height||0)>50000000) throw new Error('Photo dimensions exceed the 50-megapixel safety limit.'); }
   const duration = Number(info.format?.duration || 0);
-  if (maxDuration && duration > maxDuration) throw new Error(`Media duration exceeds the ${Math.floor(maxDuration / 60)} minute limit.`);
+  if (maxDuration && duration > maxDuration) throw new Error(`Media duration exceeds the ${maxDuration >= 120 ? Math.floor(maxDuration / 60) + ' minute' : maxDuration + ' second'} limit.`);
   return info;
 }
 function detectedMemoryLimitMB(){
@@ -388,6 +388,10 @@ async function detectLongSilences(input, duration) {
 
 const renderAutoEdit = createAutoEditRenderer({ FFMPEG, detectLongSilences, run });
 
+// Small hosts (under 1 GB RAM, e.g. Render free) run out of memory with x264 'medium' at 1080p.
+// LOW_RESOURCE forces the light x264 preset and caps output height at 720p. Override with LOW_RESOURCE=true|false.
+const LOW_RESOURCE = process.env.LOW_RESOURCE === 'true' || (process.env.LOW_RESOURCE !== 'false' && detectedMemoryLimitMB() < 1024);
+if (LOW_RESOURCE) { process.env.X264_PRESET = 'veryfast'; console.log('[Vidora] Low-resource mode: veryfast preset, 720p cap, MAX_VIDEO_SECONDS=' + MAX_VIDEO_SECONDS); }
 function buildArgs(input, output, body, info) {
   const task = String(body.task || 'convert');
   const format = String(body.format || 'mp4').toLowerCase();
@@ -463,9 +467,10 @@ function buildArgs(input, output, body, info) {
       videoFilters.push(...visualStyleFilters(body.visualStyle));
     }
 
+    if (LOW_RESOURCE && resolution === 'original') videoFilters.unshift('scale=-2:min(720\\,ih)');
     if (videoFilters.length) args.push('-vf', videoFilters.join(','));
 
-    const preset = quality === 'high' ? 'slow' : quality === 'small' ? 'veryfast' : 'medium';
+    const preset = LOW_RESOURCE ? 'veryfast' : quality === 'high' ? 'slow' : quality === 'small' ? 'veryfast' : 'medium';
     if (['mp4','mov'].includes(format)) args.push('-c:v','libx264','-preset',preset,'-crf',quality === 'high' ? '18' : quality === 'small' ? '28' : '23');
     else args.push('-c:v','libvpx-vp9','-crf',quality === 'high' ? '26' : quality === 'small' ? '38' : '32','-b:v','0');
   }
@@ -978,7 +983,7 @@ app.post('/api/jobs', requireSession, mediaJobLimit, upload.single('media'), asy
     const hasAudio = streams.some(x => x.codec_type === 'audio');
     if (!hasVideo && !hasAudio) throw new Error('Unsupported media. Upload a valid video or audio file.');
     const duration = Number(preflightInfo.format?.duration || 0);
-    if (hasVideo && duration > MAX_VIDEO_SECONDS) throw new Error('Video exceeds the 5 minute limit.');
+    if (hasVideo && duration > MAX_VIDEO_SECONDS) throw new Error(`Video exceeds the ${MAX_VIDEO_SECONDS >= 120 ? Math.floor(MAX_VIDEO_SECONDS / 60) + ' minute' : MAX_VIDEO_SECONDS + ' second'} limit.`);
     if (!hasVideo && (duration > MAX_AUDIO_SECONDS || sourceFile.size > MAX_AUDIO_MB * 1024 * 1024)) throw new Error('Audio must be 30 minutes or shorter and no larger than 50 MB.');
     if(!['convert','trim','resize','extract-audio','enhance-video','enhance-audio','normalize-audio','enhance-video-audio','visual-change'].includes(task))throw new Error('Unsupported processing task.');
     if(!hasVideo&&!['mp3','wav'].includes(outputFormat))throw new Error('Audio-only uploads must be exported as MP3 or WAV.');
@@ -1011,7 +1016,7 @@ app.post('/api/jobs', requireSession, mediaJobLimit, upload.single('media'), asy
       const mediaHasAudio = (info.streams || []).some(x => x.codec_type === 'audio');
       if (!mediaHasVideo && !mediaHasAudio) throw new Error('Unsupported or invalid media stream.');
       const mediaDuration = Number(info.format?.duration || 0);
-      if (mediaHasVideo && mediaDuration > MAX_VIDEO_SECONDS) throw new Error('Video exceeds the 5 minute limit.');
+      if (mediaHasVideo && mediaDuration > MAX_VIDEO_SECONDS) throw new Error('Video exceeds the allowed duration limit.');
       if (!mediaHasVideo && mediaDuration > MAX_AUDIO_SECONDS) throw new Error('Audio exceeds the 30 minute limit.');
       let autoEditInfo = null;
       if (task === 'visual-change') {
