@@ -69,7 +69,7 @@ function createAutoEditRenderer({ FFMPEG, detectLongSilences, run }) {
       graph.push(`[0:a:0]atrim=start=${seg.start.toFixed(3)}:end=${seg.end.toFixed(3)},asetpts=PTS-STARTPTS${af.length?','+af.join(','):''}[a${i}]`);
     });
     graph.push(keep.map((_,i)=>`[v${i}][a${i}]`).join('')+`concat=n=${keep.length}:v=1:a=1[v][a]`);
-    const args=['-hide_banner','-loglevel','error','-y','-i',input,'-filter_complex',graph.join(';'),'-map','[v]','-map','[a]','-c:v','libx264','-preset','medium','-crf','23','-c:a','aac','-b:a','192k','-movflags','+faststart','-progress','pipe:2','-nostats',output];
+    const args=['-hide_banner','-loglevel','error','-y','-i',input,'-filter_complex',graph.join(';'),'-map','[v]','-map','[a]','-c:v','libx264','-preset',process.env.X264_PRESET||'medium','-crf','23','-c:a','aac','-b:a','192k','-movflags','+faststart','-progress','pipe:2','-nostats',output];
     await run(FFMPEG,args,30*60*1000,onProgress,Number(info.format?.duration||0),onSpawn);
     return {smartCutApplied:true,removedSeconds:Number(cuts.reduce((sum,c)=>sum+c.end-c.start,0).toFixed(2)),aiCutCount:cuts.filter(c=>c.source==='ai'||c.source==='ai+silence').length,reason:`Applied ${cuts.filter(c=>c.source==='ai'||c.source==='ai+silence').length} confidence-gated AI cut(s) and ${cuts.filter(c=>c.source==='silence'||c.source==='ai+silence').length} long-silence cut(s), preserving short boundary handles. Original content outside selected cuts was retained.`};
   }
