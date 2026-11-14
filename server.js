@@ -12,7 +12,8 @@ const { spawn } = require('child_process');
 const { GoogleGenAI } = require('@google/genai');
 const { transformVideoWithRunway, cancelRunwayTask, MAX_RUNWAY_INPUT_BYTES, MAX_RUNWAY_DURATION_SECONDS } = require('./runway-video-provider');
 const { visualStyleFilters, createAutoEditRenderer } = require('./auto-edit-renderer');
-const { transformVideoWithFreeProvider } = require('./free-video-provider');
+const { enhanceVideoFilters, voiceCleanFilters, isLocalLook, lookFilters, fallbackLookFor } = require('./free-effects');
+const { transformVideoWithFreeProvider, transformWithGradio, isConfigured: gradioConfigured } = require('./free-video-provider');
 // Visual Change provider: free open-source Gradio/Hugging Face Space first, Runway (paid) only if configured.
 function visualProviderName(){const p=String(process.env.VISUAL_PROVIDER||'').toLowerCase();if(p==='runway')return process.env.RUNWAYML_API_SECRET?'runway':null;if(p==='free'||p==='huggingface')return process.env.HF_SPACE_URL?'free':null;return process.env.HF_SPACE_URL?'free':(process.env.RUNWAYML_API_SECRET?'runway':null);}
 const FREE_MAX_SECONDS=Math.max(1,Math.min(30,Number(process.env.HF_MAX_SECONDS)||5));
@@ -421,9 +422,9 @@ function buildArgs(input, output, body, info) {
   if (task === 'normalize-audio' && hasAudio) {
     args.push('-af','loudnorm=I=-16:TP=-1.5:LRA=11');
   } else if (task === 'enhance-audio' && hasAudio) {
-    args.push('-af','afftdn=nr=8:nf=-50,loudnorm=I=-16:TP=-1.5:LRA=11');
+    args.push('-af', voiceCleanFilters(12).join(','));
   } else if (task === 'enhance-video-audio' && hasAudio) {
-    args.push('-af','afftdn=nr=6:nf=-50,loudnorm=I=-16:TP=-1.5:LRA=11');
+    args.push('-af', voiceCleanFilters(10).join(','));
   } else if (task === 'enhance-video' && hasAudio && String(body.aiAudioNoEnhancementNeeded) !== 'true') {
     const clampAudio = (value, min, max) => {
       const n = Number(value);
@@ -459,13 +460,10 @@ function buildArgs(input, output, body, info) {
       const contrast = clamp(body.enhanceContrast, 0.5, 1.5, 1);
       const saturation = clamp(body.enhanceSaturation, 0, 2, 1);
 
-      if (denoise > 0) videoFilters.push(`hqdn3d=${denoise.toFixed(2)}:${denoise.toFixed(2)}:${(denoise * 1.5).toFixed(2)}:${(denoise * 1.5).toFixed(2)}`);
-      if (sharpness > 0) videoFilters.push(`unsharp=5:5:${sharpness.toFixed(2)}:5:5:0`);
-      if (brightness !== 0 || contrast !== 1 || saturation !== 1) {
-        videoFilters.push(`eq=brightness=${brightness.toFixed(3)}:contrast=${contrast.toFixed(2)}:saturation=${saturation.toFixed(2)}`);
-      }
+      videoFilters.push(...enhanceVideoFilters({ sharpness, denoise, brightness, contrast, saturation, lowResource: LOW_RESOURCE }));
       videoFilters.push(...visualStyleFilters(body.visualStyle));
     }
+    if (task === 'visual-change' && isLocalLook(body.visualStyle)) videoFilters.push(...lookFilters(body.visualStyle));
 
     if (LOW_RESOURCE && resolution === 'original') videoFilters.unshift('scale=-2:min(720\\,ih)');
     if (videoFilters.length) args.push('-vf', videoFilters.join(','));
@@ -565,7 +563,19 @@ app.post('/api/photo-enhance', requireSession, mediaJobLimit, photoUpload.single
   const output=path.join(OUT_DIR,`${crypto.randomUUID()}.png`);let workDir=null,mode='local-conservative-fallback',confidence=0;
   try{
     const photoInfo=await validateMedia(source,'photo',0);
-    let settings={sharpness:0.45,denoise:1.1,brightness:0,contrast:1.03,saturation:1.02,noEnhancementNeeded:false};
+    if(gradioConfigured('PHOTO')){
+      // Neural enhancement through a free Gradio/Hugging Face Space. Any failure falls back to the local filters below.
+      const prepared=path.join(OUT_DIR,`${crypto.randomUUID()}.photo-in.png`),raw=path.join(OUT_DIR,`${crypto.randomUUID()}.photo-out.bin`);
+      try{
+        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',source.path,'-frames:v','1','-vf','scale=min(1024\\,iw):min(1024\\,ih):force_original_aspect_ratio=decrease:flags=lanczos,format=rgb24',prepared],60000);
+        await transformWithGradio({prefix:'PHOTO',inputPath:prepared,outputPath:raw,mime:'image/png',maxWaitMs:Math.max(30000,Number(process.env.PHOTO_MAX_WAIT_MS)||90000),label:'free photo AI server'});
+        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1',output],60000);
+        res.setHeader('X-Vidora-AI-Mode','neural-gradio');res.setHeader('X-Vidora-AI-Confidence','1');
+        return res.download(output,'vidora-photo-enhanced.png',()=>safeDelete(output));
+      }catch(e){console.warn('[Vidora Photo] Neural photo enhancement failed; using local filters:',e.message);safeDelete(output);}
+      finally{safeDelete(prepared);safeDelete(raw);}
+    }
+    let settings={sharpness:0.9,denoise:1.2,brightness:0,contrast:1.08,saturation:1.1,noEnhancementNeeded:false};
     if(geminiAI){
       workDir=fs.mkdtempSync(path.join(os.tmpdir(),'vidora-photo-ai-'));
       const sample=path.join(workDir,'sample.png');
@@ -988,7 +998,9 @@ app.post('/api/jobs', requireSession, mediaJobLimit, upload.single('media'), asy
     if(!['convert','trim','resize','extract-audio','enhance-video','enhance-audio','normalize-audio','enhance-video-audio','visual-change'].includes(task))throw new Error('Unsupported processing task.');
     if(!hasVideo&&!['mp3','wav'].includes(outputFormat))throw new Error('Audio-only uploads must be exported as MP3 or WAV.');
     if(['resize','extract-audio','enhance-video','enhance-video-audio','visual-change'].includes(task)&&!hasVideo)throw new Error('This Video Studio task requires a video input.');
-    if(task==='visual-change'&&visualProviderName()==='free'){if(duration<1)throw new Error('AI Visual Change needs a clip of at least 1 second.');if(outputFormat!=='mp4')throw new Error('AI Visual Change currently exports MP4 only.');const fp=String(req.body.visualPrompt||'').trim();if(fp.length<8||fp.length>1500)throw new Error('Enter a visual transformation prompt between 8 and 1,500 characters.');}
+    if(task==='visual-change'&&!isLocalLook(req.body.visualStyle)&&!visualProviderName()&&fallbackLookFor(req.body.visualStyle))req.body.visualStyle=fallbackLookFor(req.body.visualStyle);
+    if(task==='visual-change'&&isLocalLook(req.body.visualStyle)){if(outputFormat!=='mp4')throw new Error('Instant looks export MP4 only.');}
+    else if(task==='visual-change'&&visualProviderName()==='free'){if(duration<1)throw new Error('AI Visual Change needs a clip of at least 1 second.');if(outputFormat!=='mp4')throw new Error('AI Visual Change currently exports MP4 only.');const fp=String(req.body.visualPrompt||'').trim();if(fp.length<8||fp.length>1500)throw new Error('Enter a visual transformation prompt between 8 and 1,500 characters.');}
     else if(task==='visual-change'){if(!process.env.RUNWAYML_API_SECRET){const error=new Error('AI Visual Change is not configured yet. Set HF_SPACE_URL (free) or RUNWAYML_API_SECRET (paid) in the hosting environment.');error.statusCode=503;throw error;}if(sourceFile.size>MAX_RUNWAY_INPUT_BYTES)throw new Error('AI Visual Change accepts videos up to 200 MB.');if(duration<2||duration>MAX_RUNWAY_DURATION_SECONDS)throw new Error('AI Visual Change accepts clips from 2 to 30 seconds. Trim the source to the supported duration and retry.');const visualStream=streams.find(x=>x.codec_type==='video');const parseRate=value=>{const parts=String(value||'').split('/').map(Number);return parts.length===2&&parts[1]>0?parts[0]/parts[1]:0;};const visualFps=parseRate(visualStream?.avg_frame_rate)||parseRate(visualStream?.r_frame_rate);const visualWidth=Number(visualStream?.width||0),visualHeight=Number(visualStream?.height||0),visualPixels=visualWidth*visualHeight;const supportedRunwayCodecs=new Set(['h264','hevc','av1','vp8','vp9','prores','mjpeg','mpeg2video','theora','flv1','msmpeg4v3']);if(!supportedRunwayCodecs.has(String(visualStream?.codec_name||'').toLowerCase()))throw new Error('AI Visual Change does not support this source video codec. Export it as H.264 MP4 and retry.');if(!Number.isFinite(visualFps)||visualFps<=0||visualFps>30.01)throw new Error('AI Visual Change requires footage at 30 FPS or lower. Convert the source frame rate and retry.');if(!visualPixels||Math.max(visualWidth,visualHeight)>1920||visualPixels>1920*1080)throw new Error('AI Visual Change currently accepts source footage up to 1080p. Use a 1080p or lower source clip.');if(outputFormat!=='mp4')throw new Error('AI Visual Change currently exports MP4 only.');if(String(req.body.visualPrompt||'').trim().length<8||String(req.body.visualPrompt||'').trim().length>1500)throw new Error('Enter a visual transformation prompt between 8 and 1,500 characters.');}
     if(['enhance-audio','normalize-audio'].includes(task)&&(hasVideo||!hasAudio))throw new Error('This Audio Studio task requires an audio-only input.');
     if(task==='extract-audio'&&!hasAudio)throw new Error('Audio Extractor requires a video with an audio track.');
@@ -1019,18 +1031,34 @@ app.post('/api/jobs', requireSession, mediaJobLimit, upload.single('media'), asy
       if (mediaHasVideo && mediaDuration > MAX_VIDEO_SECONDS) throw new Error('Video exceeds the allowed duration limit.');
       if (!mediaHasVideo && mediaDuration > MAX_AUDIO_SECONDS) throw new Error('Audio exceeds the 30 minute limit.');
       let autoEditInfo = null;
-      if (task === 'visual-change') {
-        if (visualProviderName() === 'free') {
+      const useVideoEnhanceAI = task === 'enhance-video' && gradioConfigured('VENH') && String(req.body.autoSmartCut) !== 'true' && String(req.body.format || 'mp4').toLowerCase() === 'mp4';
+      let skipAudioRestore = false;
+      if ((task === 'visual-change' && !isLocalLook(req.body.visualStyle)) || useVideoEnhanceAI) {
+        if (useVideoEnhanceAI || visualProviderName() === 'free') {
           // Free GPUs are small: send a short, 480p, silent copy. The original audio is restored afterwards.
           const preparedInput = path.join(OUT_DIR, `${id}.free-input.mp4`);
           try {
             await run(FFMPEG, ['-hide_banner','-loglevel','error','-y','-i',sourceFile.path,'-t',String(FREE_MAX_SECONDS),'-an','-vf','scale=-2:min(480\\,ih)','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-movflags','+faststart',preparedInput], 180000, null, 0, child => { job.child=child; });
-            job.visualChangeInfo = await transformVideoWithFreeProvider({
-              inputPath: preparedInput, outputPath: output, prompt: String(req.body.visualPrompt || ''),
-              onProgress: (p, label) => { job.progress=p; job.progressLabel=label; },
-              isCancelled: () => job.cancelRequested
-            });
-            job.visualChangeInfo.reason = `Free mode: the first ${Math.min(FREE_MAX_SECONDS, Math.floor(mediaDuration))} seconds were transformed at up to 480p.`;
+            try {
+              job.visualChangeInfo = await transformWithGradio({
+                prefix: useVideoEnhanceAI ? 'VENH' : 'HF', mime: 'video/mp4', label: useVideoEnhanceAI ? 'free video enhance server' : 'free AI server',
+                inputPath: preparedInput, outputPath: output, prompt: useVideoEnhanceAI ? '' : String(req.body.visualPrompt || ''),
+                onProgress: (p, label) => { job.progress=p; job.progressLabel=label; },
+                isCancelled: () => job.cancelRequested
+              });
+              job.visualChangeInfo.reason = `Free mode: the first ${Math.min(FREE_MAX_SECONDS, Math.floor(mediaDuration))} seconds were transformed at up to 480p.`;
+            } catch (aiError) {
+              // The free Space can be asleep, queued or out of GPU quota. Fall back to the built-in FFmpeg pipeline.
+              safeDelete(output);
+              const fallbackStyle = useVideoEnhanceAI ? null : fallbackLookFor(req.body.visualStyle);
+              if (job.cancelRequested || (!useVideoEnhanceAI && !fallbackStyle)) throw aiError;
+              console.warn('[Vidora AI] Free AI server failed; using built-in FFmpeg pipeline:', aiError.message);
+              job.progressLabel = 'Free AI server is busy. Applying the built-in look instead';
+              const fallbackBody = { ...req.body, task: useVideoEnhanceAI ? 'enhance-video' : 'visual-change', visualStyle: fallbackStyle || req.body.visualStyle };
+              await run(FFMPEG, buildArgs(sourceFile.path, output, fallbackBody, info), 30*60*1000, p => { job.progress=p; }, mediaDuration, child => { job.child=child; });
+              job.visualChangeInfo = { provider: 'Built-in FFmpeg pipeline (free AI server unavailable)', reason: `The free AI server was unavailable (${String(aiError.message).slice(0, 160)}). The full video was processed with the built-in ${fallbackStyle || 'enhance'} pipeline instead.` };
+              skipAudioRestore = true;
+            }
           } finally { safeDelete(preparedInput); }
         } else {
         job.visualChangeInfo = await transformVideoWithRunway({
@@ -1042,7 +1070,9 @@ app.post('/api/jobs', requireSession, mediaJobLimit, upload.single('media'), asy
         });
         }
         // Visual Change alters pixels only. Restore the exact source audio track after AI video generation.
-        if (mediaHasAudio) {
+        if (skipAudioRestore) {
+          job.visualChangeInfo.audioTrack = 'Audio was processed together with the video.';
+        } else if (mediaHasAudio) {
           const audioPreservedOutput = path.join(OUT_DIR, `${id}.audio-preserved.mp4`);
           try {
             await run(FFMPEG, ['-hide_banner','-loglevel','error','-y','-i',output,'-i',sourceFile.path,'-map','0:v:0','-map','1:a:0','-c:v','copy','-c:a','aac','-b:a','192k','-shortest','-movflags','+faststart',audioPreservedOutput], 180000, p => { job.progress=Math.max(job.progress,96); }, mediaDuration, child => { job.child=child; });

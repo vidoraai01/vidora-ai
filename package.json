@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check auth-support.js && node --check public/assets/app.js && node --check runway-video-provider.js && node --check auto-edit-renderer.js && node --check free-video-provider.js",
+    "check": "node --check server.js && node --check auth-support.js && node --check public/assets/app.js && node --check runway-video-provider.js && node --check auto-edit-renderer.js && node --check free-video-provider.js && node --check free-effects.js",
     "test": "node --test"
   },
   "engines": {
