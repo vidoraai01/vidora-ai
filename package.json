@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check auth-support.js && node --check public/assets/app.js && node --check runway-video-provider.js && node --check auto-edit-renderer.js",
+    "check": "node --check server.js && node --check auth-support.js && node --check public/assets/app.js && node --check runway-video-provider.js && node --check auto-edit-renderer.js && node --check free-video-provider.js",
     "test": "node --test"
   },
   "engines": {
@@ -22,7 +22,7 @@
     "express-rate-limit": "^7.5.0",
     "express-session": "^1.19.0",
     "helmet": "^8.0.0",
-    "multer": "^1.4.5-lts.1",
+    "multer": "^2.0.0",
     "pg": "^8.23.1"
   }
 }

@@ -19,7 +19,7 @@ Help is available from the header on every page. Feedback and suggestions are pu
 | Video | Video Enhance AI | Optional Gemini frame assessment recommends filter settings; FFmpeg performs the actual denoise/sharpen/colour render. This is AI-guided conventional enhancement, not a neural restoration model. |
 | Video | AI Video Analysis | Gemini-assisted sampled-frame analysis when a valid API key/model is available; otherwise returns an explicit local technical fallback. |
 | Video | AI Video Edit | Uses the AI edit/quality plan, then renders an MP4 with conservative visual enhancement and optional long-silence trimming. It does not yet apply semantic scene rearrangement, generative transitions or AI-selected clip assembly. |
-| AI Visual Change | Uses Runway Aleph 2 video-to-video editing for prompt-driven anime/cinematic restyling, background/environment changes and object/appearance edits. Requires `RUNWAYML_API_SECRET` and purchased provider credits. The source audio track is restored after the visual model finishes. Provider limits are 2–30 seconds, up to 1080p, 30 FPS or lower and 200 MB per clip; unsupported clips are rejected rather than silently truncated or downscaled. |
+| Video | AI Visual Change | Prompt-driven video-to-video restyle (anime/cinematic, background, weather). **Free mode (default when `HF_SPACE_URL` is set):** sends a short (`HF_MAX_SECONDS`, default 5 s), up-to-480p silent copy to a Gradio / Hugging Face Space running an open-source model, then restores the original audio. Free Spaces can be slow, queued or asleep and have GPU quotas. **Paid mode:** Runway Aleph (needs `RUNWAYML_API_SECRET` and credits; 2–30 s, 1080p, 30 FPS, 200 MB). Choose with `VISUAL_PROVIDER=free|runway`. |
 | Video | Video Fingerprint Check | Perceptual frame hashes sampled at 1 frame/second, with approximate alignment and matching windows. Brief segments can be missed; this is not a copyright verdict. |
 | Video | Video Full Details | FFprobe metadata report. |
 | Video | AI Video Upscale | Lanczos interpolation to the selected output size. A neural AI upscaling model is not bundled. |
@@ -30,6 +30,15 @@ Help is available from the header on every page. Feedback and suggestions are pu
 | Audio | Audio Fingerprint Check | Chromaprint acoustic fingerprint alignment and approximate similarity. It compares only the two supplied files, not a global music database. |
 
 The product labels are retained for the approved workflow, but the implementation distinctions above must remain visible to users. Do not market conventional filters/interpolation as neural AI.
+
+## Free AI Visual Change setup
+
+1. Find a Hugging Face Space (or run your own on Colab/Kaggle/PC) with a Gradio video-to-video model (Wan, LTX-Video, AnimateDiff, etc.). Open its **Use via API** page and note the endpoint name and the order of inputs.
+2. Set `HF_SPACE_URL` (the Space's direct `https://...hf.space` URL), `HF_API_NAME` (default `predict`) and `HF_INPUT_ORDER` (default `video,prompt`; use `prompt,video` if your Space expects it). Extra fixed inputs (steps, seed...) go in `HF_EXTRA_INPUTS` as a JSON array.
+3. Optionally set `HF_TOKEN` (free Hugging Face token) for a larger free GPU quota.
+4. Restart. `GET /api/system-status` (signed in) shows `visualChangeProvider`.
+
+This adapter is covered by a mocked test, but it has not been run against a live Space, because every Space has its own input layout. Expect to adjust `HF_API_NAME`/`HF_INPUT_ORDER` once.
 
 ## Media limits
 
@@ -46,7 +55,7 @@ The backend checks filename extension, file signature and FFprobe-detected strea
 
 - Node.js 20.11 or newer (for streaming provider uploads with `fs.openAsBlob`).
 - FFmpeg and FFprobe on `PATH` (or set `FFMPEG_PATH` and `FFPROBE_PATH`).
-- `fpcalc` / Chromaprint for audio fingerprint comparisons. The Dockerfile installs `libchromaprint-tools`.
+- `fpcalc` / Chromaprint for audio fingerprint comparisons. The Dockerfile installs `libchromaprint-tools`. On Windows install Chromaprint yourself and set `FPCALC_PATH`.
 - PostgreSQL for account/session/community storage.
 - Optional Gemini API key for vision-assisted analysis and enhancement recommendations.
 - Optional Resend account/API key for password-reset email delivery.
@@ -71,12 +80,12 @@ Open `http://localhost:3000`.
 
 ## Required environment variables
 
-- `DATABASE_URL` — PostgreSQL connection string with certificate validation enabled.
+- `DATABASE_URL` — PostgreSQL connection string. For a hosted database keep `DATABASE_SSL=verify`; for a local Postgres on your own PC set `DATABASE_SSL=disable`.
 - `SESSION_SECRET` — at least 48 random characters.
 - `ADMIN_EMAIL` and `ADMIN_PASSWORD_HASH` — administrator login.
 - `TRUST_PROXY_HOPS` — explicitly set in production after verifying the hosting topology.
 
-Optional variables: `RUNWAYML_API_SECRET` (for generative AI Visual Change; separate from Gemini and credit-billed), `GEMINI_API_KEY`, `GEMINI_FALLBACK_MODEL`, `GEMINI_REQUEST_TIMEOUT_MS`, `RESEND_API_KEY`, `RESEND_FROM`, `APP_BASE_URL`, `MAX_UPLOAD_MB`, `RETENTION_HOURS`, `FFMPEG_PATH`, `FFPROBE_PATH`, `FPCALC_PATH`, `DB_POOL_MAX`, `DATABASE_SSL`.
+Optional variables: `HF_SPACE_URL`, `HF_TOKEN`, `HF_API_NAME`, `HF_INPUT_ORDER`, `HF_EXTRA_INPUTS`, `HF_MAX_SECONDS`, `VISUAL_PROVIDER`, `RUNWAYML_API_SECRET` (for generative AI Visual Change; separate from Gemini and credit-billed), `GEMINI_API_KEY`, `GEMINI_FALLBACK_MODEL`, `GEMINI_REQUEST_TIMEOUT_MS`, `RESEND_API_KEY`, `RESEND_FROM`, `APP_BASE_URL`, `MAX_UPLOAD_MB`, `RETENTION_HOURS`, `FFMPEG_PATH`, `FFPROBE_PATH`, `FPCALC_PATH`, `DB_POOL_MAX`, `DATABASE_SSL`.
 
 Never commit `.env`, API keys, database credentials, session secrets or password hashes. `.gitignore` and `.dockerignore` exclude secret files, backups and `node_modules`.
 

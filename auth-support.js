@@ -8,7 +8,12 @@ const crypto = require('crypto');
 function setupAuthSupport(app) {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required.');
   if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 48) throw new Error('SESSION_SECRET must contain at least 48 characters.');
-  if (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD_HASH) throw new Error('ADMIN_EMAIL and ADMIN_PASSWORD_HASH must be configured.');
+  // Phone-friendly option: set ADMIN_PASSWORD (min 10 chars) and the server hashes it at startup.
+  if (!process.env.ADMIN_PASSWORD_HASH && process.env.ADMIN_PASSWORD) {
+    if (process.env.ADMIN_PASSWORD.length < 10 || process.env.ADMIN_PASSWORD.length > 72) throw new Error('ADMIN_PASSWORD must be 10-72 characters.');
+    process.env.ADMIN_PASSWORD_HASH = bcrypt.hashSync(process.env.ADMIN_PASSWORD, 12);
+  }
+  if (!process.env.ADMIN_EMAIL || !process.env.ADMIN_PASSWORD_HASH) throw new Error('ADMIN_EMAIL and ADMIN_PASSWORD_HASH (or ADMIN_PASSWORD) must be configured.');
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_SSL === 'disable' ? false : { rejectUnauthorized: true }, max: Math.min(5, Math.max(1, Number(process.env.DB_POOL_MAX || 3))), connectionTimeoutMillis: 10000, idleTimeoutMillis: 30000, query_timeout: 15000 });
   app.use(require('express').json({ limit: '32kb' }));
   // Trust only the configured number of ingress proxies; never use `true` on an unknown topology.

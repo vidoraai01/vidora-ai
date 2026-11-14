@@ -39,3 +39,11 @@
 - Audio/video fingerprint matching compares only the supplied files; it is not a global copyright database or a copyright verdict.
 - Jobs and upload references are process-local and are not durable across server restarts.
 - No zero-error or unlimited-quality guarantee is claimed. Live cloud integrations and the actual production hosting topology still require validation.
+
+## Review fixes
+- Fixed: `task` was block-scoped inside the validation try block in `/api/jobs` but used by the render job, which could make every job fail with "task is not defined".
+- Fixed: refresh/pagehide no longer logs the user out (this could kill running jobs).
+- Added free Visual Change provider (Gradio / Hugging Face Space) and made it the default; Runway is optional.
+- `/api/system-status` now requires sign-in. Rate limits are keyed per signed-in user instead of per IP.
+- Unknown server errors now return 500 instead of 400. Bundled `fpcalc.exe` removed. Docker build no longer runs tests.
+- Local setup docs now explain `DATABASE_SSL=disable`. Still to do: `npm install multer@2` (needs network to refresh the lockfile).

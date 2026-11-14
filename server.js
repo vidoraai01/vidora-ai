@@ -12,6 +12,10 @@ const { spawn } = require('child_process');
 const { GoogleGenAI } = require('@google/genai');
 const { transformVideoWithRunway, cancelRunwayTask, MAX_RUNWAY_INPUT_BYTES, MAX_RUNWAY_DURATION_SECONDS } = require('./runway-video-provider');
 const { visualStyleFilters, createAutoEditRenderer } = require('./auto-edit-renderer');
+const { transformVideoWithFreeProvider } = require('./free-video-provider');
+// Visual Change provider: free open-source Gradio/Hugging Face Space first, Runway (paid) only if configured.
+function visualProviderName(){const p=String(process.env.VISUAL_PROVIDER||'').toLowerCase();if(p==='runway')return process.env.RUNWAYML_API_SECRET?'runway':null;if(p==='free'||p==='huggingface')return process.env.HF_SPACE_URL?'free':null;return process.env.HF_SPACE_URL?'free':(process.env.RUNWAYML_API_SECRET?'runway':null);}
+const FREE_MAX_SECONDS=Math.max(1,Math.min(30,Number(process.env.HF_MAX_SECONDS)||5));
 
 const geminiAI = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, httpOptions: { apiVersion: 'v1beta', timeout: 180000, retryOptions: { attempts: 1 } } }) : null;
 const app = express();
@@ -34,8 +38,9 @@ for (const dir of [IN_DIR, OUT_DIR]) fs.mkdirSync(dir, { recursive: true, mode: 
 
 const jobs = new Map();
 const uploads = new Map();
-const mediaJobLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 8, standardHeaders: true, legacyHeaders: false, message: { error: 'Media processing limit reached. Please wait before starting another job.' } });
-const analysisLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 4, standardHeaders: true, legacyHeaders: false, message: { error: 'Analysis limit reached. Please wait before retrying.' } });
+const userKey = req => req.session?.account?.id ? 'u:' + req.session.account.id : req.ip;
+const mediaJobLimit = rateLimit({ keyGenerator: userKey, windowMs: 15 * 60 * 1000, limit: 8, standardHeaders: true, legacyHeaders: false, message: { error: 'Media processing limit reached. Please wait before starting another job.' } });
+const analysisLimit = rateLimit({ keyGenerator: userKey, windowMs: 15 * 60 * 1000, limit: 4, standardHeaders: true, legacyHeaders: false, message: { error: 'Analysis limit reached. Please wait before retrying.' } });
 const requireSession = (req,res,next) => req.session?.account ? next() : res.status(401).json({ error: 'Sign in is required before using Vidora tools.' });
 const currentUserId = req => String(req.session.account.id);
 const MIME_EXT = new Set(['.mp4','.mov','.webm','.mkv','.mp3','.wav','.m4a','.aac','.ogg','.flac','.jpg','.jpeg','.png','.webp','.bmp','.tif','.tiff']);
@@ -72,6 +77,7 @@ const authReady = (() => { try { return setupAuthSupport(app); } catch (error) {
 app.use('/assets', express.static(path.join(__dirname, 'public', 'assets'), { dotfiles: 'deny', index: false, fallthrough: false, maxAge: '5m' }));
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.use('/api/', rateLimit({
+  keyGenerator: userKey,
   windowMs: 60_000,
   // Job status polling runs every 2 seconds during long exports; 20/min
   // incorrectly blocked valid renders after about 40 seconds.
@@ -485,7 +491,7 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.get('/api/system-status', (_req, res) => {
+app.get('/api/system-status', requireSession, (_req, res) => {
   const commandAvailable = command => new Promise(resolve => {
     const child = spawn(command, ['-version'], { stdio: ['ignore', 'ignore', 'ignore'] });
     let settled = false;
@@ -496,7 +502,7 @@ app.get('/api/system-status', (_req, res) => {
   const databaseReady = app.locals.vidoraPool ? app.locals.vidoraPool.query('SELECT 1').then(()=>true).catch(()=>false) : Promise.resolve(false);
   Promise.all([commandAvailable(FFMPEG), commandAvailable(FFPROBE), commandAvailable(FPCALC), databaseReady]).then(([ffmpeg, ffprobe, fpcalc, database]) => {
     res.json({ ok: true, service: 'Vidora AI', capabilities: {
-      database, geminiConfigured: Boolean(geminiAI), runwayVisualChangeConfigured: Boolean(process.env.RUNWAYML_API_SECRET), ffmpeg, ffprobe, chromaprint: fpcalc,
+      database, geminiConfigured: Boolean(geminiAI), runwayVisualChangeConfigured: Boolean(process.env.RUNWAYML_API_SECRET), visualChangeProvider: visualProviderName(), ffmpeg, ffprobe, chromaprint: fpcalc,
       aiVision: Boolean(geminiAI), localMediaAnalysis: ffmpeg && ffprobe,
       audioFingerprint: fpcalc
     }, note: 'Database connectivity and local binaries were checked. Gemini API key presence is configuration-only; model access is verified when an analysis request runs.' });
@@ -962,6 +968,7 @@ app.post('/api/jobs', requireSession, mediaJobLimit, upload.single('media'), asy
   if (!sourceFile) return res.status(400).json({ error:'Choose a media file first.' });
   if (sourceFile.size > MAX_UPLOAD_MB * 1024 * 1024) { if(req.file)safeDelete(req.file.path); return res.status(413).json({error:'Upload exceeds the 250 MB video limit.'}); }
   let preflightInfo;
+  const task=String(req.body.task||'convert'),outputFormat=String(req.body.format||'mp4').toLowerCase();
   try {
     validateMagic(sourceFile);
     preflightInfo = await probe(sourceFile.path);
@@ -973,11 +980,11 @@ app.post('/api/jobs', requireSession, mediaJobLimit, upload.single('media'), asy
     const duration = Number(preflightInfo.format?.duration || 0);
     if (hasVideo && duration > MAX_VIDEO_SECONDS) throw new Error('Video exceeds the 5 minute limit.');
     if (!hasVideo && (duration > MAX_AUDIO_SECONDS || sourceFile.size > MAX_AUDIO_MB * 1024 * 1024)) throw new Error('Audio must be 30 minutes or shorter and no larger than 50 MB.');
-    const task=String(req.body.task||'convert'),outputFormat=String(req.body.format||'mp4').toLowerCase();
     if(!['convert','trim','resize','extract-audio','enhance-video','enhance-audio','normalize-audio','enhance-video-audio','visual-change'].includes(task))throw new Error('Unsupported processing task.');
     if(!hasVideo&&!['mp3','wav'].includes(outputFormat))throw new Error('Audio-only uploads must be exported as MP3 or WAV.');
     if(['resize','extract-audio','enhance-video','enhance-video-audio','visual-change'].includes(task)&&!hasVideo)throw new Error('This Video Studio task requires a video input.');
-    if(task==='visual-change'){if(!process.env.RUNWAYML_API_SECRET){const error=new Error('AI Visual Change is not configured yet. Add RUNWAYML_API_SECRET in the hosting environment.');error.statusCode=503;throw error;}if(sourceFile.size>MAX_RUNWAY_INPUT_BYTES)throw new Error('AI Visual Change accepts videos up to 200 MB.');if(duration<2||duration>MAX_RUNWAY_DURATION_SECONDS)throw new Error('AI Visual Change accepts clips from 2 to 30 seconds. Trim the source to the supported duration and retry.');const visualStream=streams.find(x=>x.codec_type==='video');const parseRate=value=>{const parts=String(value||'').split('/').map(Number);return parts.length===2&&parts[1]>0?parts[0]/parts[1]:0;};const visualFps=parseRate(visualStream?.avg_frame_rate)||parseRate(visualStream?.r_frame_rate);const visualWidth=Number(visualStream?.width||0),visualHeight=Number(visualStream?.height||0),visualPixels=visualWidth*visualHeight;const supportedRunwayCodecs=new Set(['h264','hevc','av1','vp8','vp9','prores','mjpeg','mpeg2video','theora','flv1','msmpeg4v3']);if(!supportedRunwayCodecs.has(String(visualStream?.codec_name||'').toLowerCase()))throw new Error('AI Visual Change does not support this source video codec. Export it as H.264 MP4 and retry.');if(!Number.isFinite(visualFps)||visualFps<=0||visualFps>30.01)throw new Error('AI Visual Change requires footage at 30 FPS or lower. Convert the source frame rate and retry.');if(!visualPixels||Math.max(visualWidth,visualHeight)>1920||visualPixels>1920*1080)throw new Error('AI Visual Change currently accepts source footage up to 1080p. Use a 1080p or lower source clip.');if(outputFormat!=='mp4')throw new Error('AI Visual Change currently exports MP4 only.');if(String(req.body.visualPrompt||'').trim().length<8||String(req.body.visualPrompt||'').trim().length>1500)throw new Error('Enter a visual transformation prompt between 8 and 1,500 characters.');}
+    if(task==='visual-change'&&visualProviderName()==='free'){if(duration<1)throw new Error('AI Visual Change needs a clip of at least 1 second.');if(outputFormat!=='mp4')throw new Error('AI Visual Change currently exports MP4 only.');const fp=String(req.body.visualPrompt||'').trim();if(fp.length<8||fp.length>1500)throw new Error('Enter a visual transformation prompt between 8 and 1,500 characters.');}
+    else if(task==='visual-change'){if(!process.env.RUNWAYML_API_SECRET){const error=new Error('AI Visual Change is not configured yet. Set HF_SPACE_URL (free) or RUNWAYML_API_SECRET (paid) in the hosting environment.');error.statusCode=503;throw error;}if(sourceFile.size>MAX_RUNWAY_INPUT_BYTES)throw new Error('AI Visual Change accepts videos up to 200 MB.');if(duration<2||duration>MAX_RUNWAY_DURATION_SECONDS)throw new Error('AI Visual Change accepts clips from 2 to 30 seconds. Trim the source to the supported duration and retry.');const visualStream=streams.find(x=>x.codec_type==='video');const parseRate=value=>{const parts=String(value||'').split('/').map(Number);return parts.length===2&&parts[1]>0?parts[0]/parts[1]:0;};const visualFps=parseRate(visualStream?.avg_frame_rate)||parseRate(visualStream?.r_frame_rate);const visualWidth=Number(visualStream?.width||0),visualHeight=Number(visualStream?.height||0),visualPixels=visualWidth*visualHeight;const supportedRunwayCodecs=new Set(['h264','hevc','av1','vp8','vp9','prores','mjpeg','mpeg2video','theora','flv1','msmpeg4v3']);if(!supportedRunwayCodecs.has(String(visualStream?.codec_name||'').toLowerCase()))throw new Error('AI Visual Change does not support this source video codec. Export it as H.264 MP4 and retry.');if(!Number.isFinite(visualFps)||visualFps<=0||visualFps>30.01)throw new Error('AI Visual Change requires footage at 30 FPS or lower. Convert the source frame rate and retry.');if(!visualPixels||Math.max(visualWidth,visualHeight)>1920||visualPixels>1920*1080)throw new Error('AI Visual Change currently accepts source footage up to 1080p. Use a 1080p or lower source clip.');if(outputFormat!=='mp4')throw new Error('AI Visual Change currently exports MP4 only.');if(String(req.body.visualPrompt||'').trim().length<8||String(req.body.visualPrompt||'').trim().length>1500)throw new Error('Enter a visual transformation prompt between 8 and 1,500 characters.');}
     if(['enhance-audio','normalize-audio'].includes(task)&&(hasVideo||!hasAudio))throw new Error('This Audio Studio task requires an audio-only input.');
     if(task==='extract-audio'&&!hasAudio)throw new Error('Audio Extractor requires a video with an audio track.');
     if(task==='enhance-video-audio'&&!hasAudio)throw new Error('Video Audio Enhance requires a video with an audio track.');
@@ -1008,6 +1015,19 @@ app.post('/api/jobs', requireSession, mediaJobLimit, upload.single('media'), asy
       if (!mediaHasVideo && mediaDuration > MAX_AUDIO_SECONDS) throw new Error('Audio exceeds the 30 minute limit.');
       let autoEditInfo = null;
       if (task === 'visual-change') {
+        if (visualProviderName() === 'free') {
+          // Free GPUs are small: send a short, 480p, silent copy. The original audio is restored afterwards.
+          const preparedInput = path.join(OUT_DIR, `${id}.free-input.mp4`);
+          try {
+            await run(FFMPEG, ['-hide_banner','-loglevel','error','-y','-i',sourceFile.path,'-t',String(FREE_MAX_SECONDS),'-an','-vf','scale=-2:min(480\\,ih)','-c:v','libx264','-preset','veryfast','-crf','24','-pix_fmt','yuv420p','-movflags','+faststart',preparedInput], 180000, null, 0, child => { job.child=child; });
+            job.visualChangeInfo = await transformVideoWithFreeProvider({
+              inputPath: preparedInput, outputPath: output, prompt: String(req.body.visualPrompt || ''),
+              onProgress: (p, label) => { job.progress=p; job.progressLabel=label; },
+              isCancelled: () => job.cancelRequested
+            });
+            job.visualChangeInfo.reason = `Free mode: the first ${Math.min(FREE_MAX_SECONDS, Math.floor(mediaDuration))} seconds were transformed at up to 480p.`;
+          } finally { safeDelete(preparedInput); }
+        } else {
         job.visualChangeInfo = await transformVideoWithRunway({
           inputPath: sourceFile.path, outputPath: output, prompt: String(req.body.visualPrompt || ''),
           apiKey: process.env.RUNWAYML_API_SECRET,
@@ -1015,6 +1035,7 @@ app.post('/api/jobs', requireSession, mediaJobLimit, upload.single('media'), asy
           isCancelled: () => job.cancelRequested,
           onTaskId: taskId => { job.remoteTaskId=taskId; }
         });
+        }
         // Visual Change alters pixels only. Restore the exact source audio track after AI video generation.
         if (mediaHasAudio) {
           const audioPreservedOutput = path.join(OUT_DIR, `${id}.audio-preserved.mp4`);
@@ -1088,7 +1109,7 @@ setInterval(() => {
   for(const dir of [IN_DIR,OUT_DIR])fs.readdir(dir,{withFileTypes:true},(err,entries)=>{if(err)return;for(const entry of entries){if(!entry.isFile())continue;const file=path.join(dir,entry.name);if(activePaths.has(file))continue;fs.stat(file,(statErr,st)=>{if(!statErr&&st.mtimeMs<cutoff)safeDelete(file);});}});
 }, 10 * 60_000).unref();
 app.use((err,_req,res,_next) => {
-  const status = err instanceof multer.MulterError ? (err.code === 'LIMIT_FILE_SIZE' ? 413 : 400) : (err.statusCode || 400);
+  const status = err instanceof multer.MulterError ? (err.code === 'LIMIT_FILE_SIZE' ? 413 : 400) : (err.statusCode || (err.name === 'Error' && /extension|accepts|only/i.test(err.message || '') ? 400 : 500));
   const message = status >= 500 ? 'The request could not be completed. Please retry or contact Help with the request time.' : (err.message || 'Upload failed.');
   if (status >= 500) console.error('[Vidora request error]', err);
   res.status(status).json({ error: message });
@@ -1101,10 +1122,3 @@ authReady.then(() => {
   console.error('[Vidora] Accounts database initialization failed:', error.message);
   process.exit(1);
 });
-
-
-
-
-
-
-

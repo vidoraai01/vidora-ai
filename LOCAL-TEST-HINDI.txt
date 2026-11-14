@@ -1,0 +1,34 @@
+VIDORA AI - LOCAL TEST SETUP (HINDI)
+
+ZARURI:
+- Node.js 20.11+, PostgreSQL, FFmpeg/FFprobe chahiye.
+- Audio fingerprint ke liye Chromaprint (fpcalc) alag se install karo; Windows par FPCALC_PATH set karo.
+- Real API keys/passwords ko ZIP ya GitHub par upload mat karna.
+
+STEPS:
+1. ZIP extract karo, folder me terminal kholo.
+2. Verify: node --version, ffmpeg -version, ffprobe -version
+3. PostgreSQL me ek database banao.
+4. .env.example ko copy karke .env naam do.
+5. .env me ye set karo:
+   DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/DBNAME
+   DATABASE_SSL=disable        <-- LOCAL Postgres ke liye ZARURI (warna "server does not support SSL" error aayega)
+   SESSION_SECRET=(kam se kam 48 random characters)
+   ADMIN_EMAIL=aapka email
+   ADMIN_PASSWORD_HASH=(bcrypt hash)
+   TRUST_PROXY_HOPS=0
+   NODE_ENV=development
+6. Multer security update (ek baar): npm install multer@2
+7. npm ci   (agar step 6 kiya to bas: npm install)
+8. npm test
+9. npm start  ->  http://localhost:3000
+
+FREE AI VISUAL CHANGE:
+- .env me HF_SPACE_URL me apne Hugging Face Space ka URL daalo.
+- Space ka "Use via API" page dekh kar HF_API_NAME aur HF_INPUT_ORDER match karo.
+- Free mode me sirf pehle 5 second, 480p tak transform hote hain. Space busy ya sleep ho sakta hai.
+
+PHONE PAR TEST:
+- Phone aur PC same Wi-Fi par ho. PC ka local IP dekho (Windows: ipconfig).
+- Phone browser me http://PC-IP:3000 kholo. Firewall me port 3000 allow karo.
+- NODE_ENV=development hi rakho, warna secure cookie http par save nahi hogi.
