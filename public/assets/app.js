@@ -208,3 +208,23 @@
   }
   if(reduce){frame(0);window.addEventListener('resize',()=>frame(performance.now()));}else rafId=requestAnimationFrame(frame);
 })();
+
+/* ===== Admin shortcut: show a "Dashboard" button in the header only for the signed-in administrator ===== */
+(function(){
+  'use strict';
+  const badge=document.getElementById('sessionBadge'),actions=document.querySelector('.top-actions');
+  if(!badge||!actions||!window.fetch) return;
+  let busy=false;
+  async function sync(){
+    if(busy) return;busy=true;
+    try{
+      const r=await fetch('/api/auth/me',{credentials:'same-origin',cache:'no-store'}),d=await r.json();
+      let link=document.getElementById('adminLink');
+      if(d&&d.user&&d.user.role==='admin'){
+        if(!link){link=document.createElement('a');link.id='adminLink';link.className='outline-btn';link.href='/admin';link.textContent='📊 Dashboard';actions.prepend(link);}
+      }else if(link){link.remove();}
+    }catch{/* ignore */}finally{busy=false;}
+  }
+  new MutationObserver(sync).observe(badge,{childList:true,characterData:true,subtree:true});
+  sync();
+})();
