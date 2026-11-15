@@ -2,7 +2,7 @@
   'use strict';
   // Owner dashboard. Every piece of user-supplied text is inserted with textContent (never innerHTML).
   const app = document.getElementById('app');
-  const state = { days: 7, auto: false, timer: null, filter: 'open', search: '', data: null, openUser: null };
+  const state = { generated: null, days: 7, auto: false, timer: null, filter: 'open', search: '', data: null, openUser: null };
   const TZ = 'Asia/Kolkata';
 
   function h(tag, attrs, ...kids) {
@@ -117,8 +117,7 @@
   function userRow(u) {
     const body = h('div', { class: 'uact' }, h('div', { class: 'empty', text: 'Loading activity…' }));
     const row = h('div', { class: 'urow' });
-    const rb = h('div', { class: 'uact' });
-    const extra = h('div', null, body, h('button', { class: 'outline-btn', type: 'button', text: 'Password reset link banao', onclick: () => makeLink(u, rb) }), rb);
+    const extra = h('div', null, body, h('button', { class: 'outline-btn', type: 'button', text: 'Password reset link banao', onclick: () => makeLink(u) }));
     const head = h('button', { class: 'uhead', type: 'button', 'aria-expanded': 'false', onclick: async () => {
       const open = row.classList.toggle('open'); head.setAttribute('aria-expanded', String(open));
       if (!open) { extra.remove(); return; } row.append(extra);
@@ -167,21 +166,30 @@
       h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Provider', 'Users', 'Login kiya', 'Sign-ins', 'Share'].map((t, i) => h('th', { class: i ? 'num' : '', text: t })))), h('tbody', null, rows))));
   }
 
-  async function makeLink(u, box) {
+  // The freshly made link is kept in state so a refresh/re-render never wipes it before you copy it.
+  async function makeLink(u) {
     try {
       const r = await api('/api/admin/users/' + encodeURIComponent(u.id) + '/reset-link', { method: 'POST' });
-      const inp = h('input', { type: 'text', readonly: true, value: r.link, 'aria-label': 'Reset link' });
-      box.replaceChildren(h('div', { class: 'hint', text: r.user.email + ' ke liye link (' + r.expiresInMinutes + ' min valid, sirf ek baar chalega). WhatsApp par bhejo:' }), inp,
-        h('button', { class: 'primary-btn', type: 'button', text: 'Copy link', onclick: async () => { try { await navigator.clipboard.writeText(r.link); toast('Link copy ho gaya.'); } catch { inp.focus(); inp.select(); toast('Link select kiya, copy karo.'); } } }));
-      load(true);
+      state.generated = { link: r.link, email: r.user.email, minutes: r.expiresInMinutes, at: Date.now() };
+      render(); window.scrollTo(0, 0);
     } catch (e) { toast(e.message); }
+  }
+
+  function generatedSection() {
+    const g = state.generated; if (!g) return null;
+    const inp = h('input', { type: 'text', readonly: true, value: g.link, 'aria-label': 'Reset link' });
+    return h('section', { class: 'adm-card' }, h('h2', { text: 'Reset link ready' }),
+      h('p', { class: 'hint', text: g.email + ' ke liye link (' + g.minutes + ' min valid, sirf ek baar chalega). Copy karke WhatsApp par bhejo:' }), inp,
+      h('div', { class: 'rep-actions' },
+        h('button', { class: 'primary-btn', type: 'button', text: 'Copy link', onclick: async () => { try { await navigator.clipboard.writeText(g.link); toast('Link copy ho gaya.'); } catch { inp.focus(); inp.select(); toast('Link select kiya, ab copy karo.'); } } }),
+        h('button', { class: 'outline-btn', type: 'button', text: 'Close', onclick: () => { state.generated = null; load(true); } })));
   }
 
   function resetSection(d) {
     if (!d.resetRequests.length) return null;
     return h('section', { class: 'adm-card' }, h('h2', { text: 'Password reset requests (' + d.resetRequests.length + ')' }),
       h('p', { class: 'hint', text: 'In users ne "Forgot password" dabaya par email nahi ja saki. Link banao aur unhe WhatsApp/DM se bhejo.' }),
-      d.resetRequests.map(r => { const box = h('div', { class: 'uact' }); return h('div', { class: 'urow open' }, h('div', { class: 'uhead' }, h('div', null, h('div', { class: 'uname', text: r.name }), h('div', { class: 'umail', text: r.email }), h('div', { class: 'umail', text: when(r.at) + ' · ' + (r.detail || r.status) })), h('button', { class: 'primary-btn', type: 'button', text: 'Reset link banao', onclick: () => makeLink({ id: r.userId }, box) })), box); }));
+      d.resetRequests.map(r => { return h('div', { class: 'urow open' }, h('div', { class: 'uhead' }, h('div', null, h('div', { class: 'uname', text: r.name }), h('div', { class: 'umail', text: r.email }), h('div', { class: 'umail', text: when(r.at) + ' · ' + (r.detail || r.status) })), h('button', { class: 'primary-btn', type: 'button', text: 'Reset link banao', onclick: () => makeLink({ id: r.userId }) }))); }));
   }
 
   function render() {
@@ -190,7 +198,7 @@
     const range = h('div', { class: 'adm-range' }, [[1, '24 h'], [7, '7 days'], [30, '30 days'], [90, '90 days']].map(([v, t]) => h('button', { type: 'button', class: state.days === v ? 'on' : '', text: t, onclick: () => { state.days = v; load(); } })));
     const auto = h('input', { type: 'checkbox', checked: state.auto }); auto.addEventListener('change', () => setAuto(auto.checked));
     const keep = window.scrollY;
-    app.replaceChildren(
+    const parts = [
       h('div', { class: 'adm-bar' }, h('div', null, h('div', { class: 'eyebrow', text: 'OWNER DASHBOARD · ' + label.toUpperCase() }), h('h1', { text: 'How Vidora is doing' })), range),
       h('div', { class: 'adm-meta' }, h('button', { class: 'outline-btn', type: 'button', text: '↻ Refresh', onclick: () => load() }), h('label', null, auto, 'Auto-refresh 60s'), h('span', { text: 'Updated ' + when(d.generatedAt) + ' IST' })),
       h('div', { class: 'kpis' },
@@ -203,7 +211,8 @@
         kpi('Failures', num(fails), num(k.runsFailed) + ' tool + ' + num(k.uploadFailures) + ' upload', fails ? 'bad' : 'good'),
         kpi('Open reports', num(k.openReports), num(k.openHigh) + ' high priority', k.openHigh ? 'bad' : k.openReports ? 'warn' : 'good')),
       h('section', { class: 'adm-card' }, h('h2', { text: 'Activity' }), h('p', { class: 'hint', text: 'Bar par tap/hover karo to us din ke numbers dikhenge.' }), chart(d.series, d.unit)),
-      lifetimeSection(d), resetSection(d), reportsSection(d), errorsSection(d), toolsSection(d), usersSection(d), systemSection(d));
+      lifetimeSection(d), generatedSection(), resetSection(d), reportsSection(d), errorsSection(d), toolsSection(d), usersSection(d), systemSection(d)];
+    app.replaceChildren(...parts.filter(Boolean));
     window.scrollTo(0, keep);
   }
 
