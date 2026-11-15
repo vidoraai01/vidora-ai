@@ -32,22 +32,26 @@ function setupAuthSupport(app) {
   const origin = (req,res,next) => { const o=req.get('origin'); if(o){try{if(new URL(o).host!==req.get('host'))return res.status(403).json({error:'Origin rejected.'});}catch{return res.status(403).json({error:'Invalid origin.'});}} next(); };
   const setSession = (req,res,next,account,status=200) => req.session.regenerate(err=>{if(err)return next(err);req.session.account=account;req.session.save(e=>e?next(e):res.status(status).json({user:account}));});
 
+  const track=require('./analytics').setupAnalytics(app,pool,{user,admin,readLimit});
   app.get('/api/auth/me',readLimit,(req,res)=>res.set('Cache-Control','no-store').json({user:req.session.account||null}));
   app.post('/api/auth/signup',authLimit,origin,async(req,res,next)=>{try{
     const name=String(req.body.name||'').trim().slice(0,60), email=String(req.body.email||'').trim().toLowerCase(), password=String(req.body.password||'');
     if(email===String(process.env.ADMIN_EMAIL).trim().toLowerCase())return res.status(403).json({error:'This address is reserved for the administrator.'});
     if(name.length<2||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254||password.length<10||password.length>72)return res.status(400).json({error:'Enter a valid name/email and a 10–72 character password.'});
     const hash=await bcrypt.hash(password,12);const q=await pool.query('INSERT INTO vidora_users(name,email,password_hash) VALUES($1,$2,$3) RETURNING id,name,email',[name,email,hash]);
+    track('signup',{userId:q.rows[0].id,status:'ok'});
     setSession(req,res,next,{id:q.rows[0].id,name,email,role:'user'},201);
   }catch(e){if(e.code==='23505')return res.status(409).json({error:'An account with this email already exists.'});next(e);}});
   app.post('/api/auth/login',authLimit,origin,async(req,res,next)=>{try{
     const email=String(req.body.email||'').trim().toLowerCase(), password=String(req.body.password||'');
     if(email===String(process.env.ADMIN_EMAIL).trim().toLowerCase()){
-      if(!(await bcrypt.compare(password,process.env.ADMIN_PASSWORD_HASH)))return res.status(401).json({error:'Email or password is incorrect.'});
+      if(!(await bcrypt.compare(password,process.env.ADMIN_PASSWORD_HASH))){track('login_failed',{status:'failed',detail:'admin wrong password'});return res.status(401).json({error:'Email or password is incorrect.'});}
+      track('login',{userId:app.locals.adminAccount.id,status:'ok'});
       return setSession(req,res,next,{id:String(app.locals.adminAccount.id),name:'Vidora Admin',email,role:'admin'});
     }
     const q=await pool.query('SELECT id,name,email,password_hash FROM vidora_users WHERE email=$1',[email]);const r=q.rows[0];
-    if(!r||!(await bcrypt.compare(password,r.password_hash)))return res.status(401).json({error:'Email or password is incorrect.'});
+    if(!r||!(await bcrypt.compare(password,r.password_hash))){track('login_failed',{userId:r?r.id:null,status:'failed',detail:r?'wrong password':'unknown email'});return res.status(401).json({error:'Email or password is incorrect.'});}
+    track('login',{userId:r.id,status:'ok'});
     setSession(req,res,next,{id:r.id,name:r.name,email:r.email,role:'user'});
   }catch(e){next(e);}});
   app.post('/api/auth/forgot-password',resetLimit,origin,async(req,res,next)=>{
@@ -97,6 +101,7 @@ function setupAuthSupport(app) {
   return pool.query(`CREATE TABLE IF NOT EXISTS vidora_users(id BIGSERIAL PRIMARY KEY,name VARCHAR(60) NOT NULL,email VARCHAR(254) NOT NULL UNIQUE,password_hash TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
     CREATE TABLE IF NOT EXISTS vidora_comments(id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES vidora_users(id) ON DELETE CASCADE,body VARCHAR(2000) NOT NULL,kind VARCHAR(20) NOT NULL DEFAULT 'feedback',status VARCHAR(20) NOT NULL DEFAULT 'received',priority VARCHAR(10) NOT NULL DEFAULT 'normal',ai_reply TEXT NOT NULL,ai_analysis TEXT NOT NULL,admin_note TEXT,is_public BOOLEAN NOT NULL DEFAULT false,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
     CREATE INDEX IF NOT EXISTS vidora_comments_created_idx ON vidora_comments(created_at DESC); CREATE INDEX IF NOT EXISTS vidora_comments_user_idx ON vidora_comments(user_id);
+    ${require('./analytics').EVENTS_SCHEMA}
     CREATE TABLE IF NOT EXISTS vidora_password_resets(id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES vidora_users(id) ON DELETE CASCADE,token_hash CHAR(64) NOT NULL UNIQUE,expires_at TIMESTAMPTZ NOT NULL,used_at TIMESTAMPTZ,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()); CREATE INDEX IF NOT EXISTS vidora_password_resets_user_idx ON vidora_password_resets(user_id);`)
     .then(async()=>{
       const adminEmail=String(process.env.ADMIN_EMAIL).trim().toLowerCase();

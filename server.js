@@ -44,6 +44,18 @@ const mediaJobLimit = rateLimit({ keyGenerator: userKey, windowMs: 15 * 60 * 100
 const analysisLimit = rateLimit({ keyGenerator: userKey, windowMs: 15 * 60 * 1000, limit: 4, standardHeaders: true, legacyHeaders: false, message: { error: 'Analysis limit reached. Please wait before retrying.' } });
 const requireSession = (req,res,next) => req.session?.account ? next() : res.status(401).json({ error: 'Sign in is required before using Vidora tools.' });
 const currentUserId = req => String(req.session.account.id);
+// Owner-dashboard event log (never throws; no IPs / file names are stored).
+const track = (kind, userId, extra = {}) => { try { if (app.locals.track) app.locals.track(kind, { userId, ...extra }); } catch { /* ignore */ } };
+const trackFinish = (tool, kind = 'analysis', { onlyFailures = false } = {}) => (req, res, next) => {
+  const t0 = Date.now(); let err = null; const json = res.json.bind(res);
+  res.json = body => { if (body && body.error) err = body.error; return json(body); };
+  res.on('finish', () => {
+    const code = res.statusCode, failed = code >= 400 && ![401, 409, 429].includes(code);
+    if (code === 401 || code === 409 || code === 429 || (onlyFailures && !failed)) return;
+    track(kind, req.session?.account?.id, { tool: typeof tool === 'function' ? tool(req) : tool, status: failed ? 'failed' : 'ok', detail: failed ? (err || `HTTP ${code}`) : null, ms: Date.now() - t0 });
+  });
+  next();
+};
 const MIME_EXT = new Set(['.mp4','.mov','.webm','.mkv','.mp3','.wav','.m4a','.aac','.ogg','.flac','.jpg','.jpeg','.png','.webp','.bmp','.tif','.tiff']);
 const DECLARED_MIME = {
   '.mp4':['video/mp4','application/mp4'],'.mov':['video/quicktime','video/mp4'],'.webm':['video/webm'],'.mkv':['video/x-matroska','video/matroska'],
@@ -124,8 +136,9 @@ app.post('/api/uploads', requireSession, mediaJobLimit, upload.single('media'), 
     else if(PHOTO_EXT.has(ext)){kind='photo';if(req.file.size>MAX_PHOTO_MB*1024*1024)throw new Error('Photo must be no larger than 25 MB.');info=await validateMedia(req.file,'photo',0);}
     else {kind='audio';if(req.file.size>MAX_AUDIO_MB*1024*1024)throw new Error('Audio must be no larger than 50 MB.');info=await validateMedia(req.file,'audio',MAX_AUDIO_SECONDS);}
     const id=crypto.randomUUID();uploads.set(id,{id,ownerId:currentUserId(req),path:req.file.path,originalName:req.file.originalname,size:req.file.size,kind,metadata:info,createdAt:Date.now()});
+    track('upload',currentUserId(req),{tool:kind,status:'ok',bytes:req.file.size});
     res.status(201).json({ok:true,uploadId:id,kind,originalName:req.file.originalname,size:req.file.size,metadata:info,expiresInHours:RETENTION_HOURS});
-  }catch(e){safeDelete(req.file.path);res.status(400).json({error:e.message||'Media validation failed.'});}
+  }catch(e){track('upload',currentUserId(req),{tool:(x=>VIDEO_EXT.has(x)?'video':PHOTO_EXT.has(x)?'photo':'audio')(path.extname(req.file.originalname||'').toLowerCase()),status:'failed',detail:e.message,bytes:req.file&&req.file.size});safeDelete(req.file.path);res.status(400).json({error:e.message||'Media validation failed.'});}
 });
 app.delete('/api/uploads/:id',requireSession,(req,res)=>{const item=ownedUpload(req,req.params.id);if(!item)return res.status(404).json({error:'Upload not found or expired.'});removeUpload(req.params.id);res.json({ok:true});});
 
@@ -392,6 +405,12 @@ const renderAutoEdit = createAutoEditRenderer({ FFMPEG, detectLongSilences, run 
 // Small hosts (under 1 GB RAM, e.g. Render free) run out of memory with x264 'medium' at 1080p.
 // LOW_RESOURCE forces the light x264 preset and caps output height at 720p. Override with LOW_RESOURCE=true|false.
 const LOW_RESOURCE = process.env.LOW_RESOURCE === 'true' || (process.env.LOW_RESOURCE !== 'false' && detectedMemoryLimitMB() < 1024);
+app.locals.systemInfo = () => ({
+  uptimeSeconds: Math.round(process.uptime()), rssMB: Math.round(process.memoryUsage().rss / 1048576), node: process.version,
+  lowResource: LOW_RESOURCE, maxVideoSeconds: MAX_VIDEO_SECONDS, memoryLimitMB: detectedMemoryLimitMB(),
+  activeJobs: [...jobs.values()].filter(j => j.status === 'processing').length, heldUploads: uploads.size,
+  providers: { visualChange: visualProviderName() || 'none (instant looks only)', photoAI: gradioConfigured('PHOTO'), videoEnhanceAI: gradioConfigured('VENH'), gemini: Boolean(geminiAI), resetEmail: Boolean(process.env.RESEND_API_KEY) }
+});
 if (LOW_RESOURCE) { process.env.X264_PRESET = 'veryfast'; console.log('[Vidora] Low-resource mode: veryfast preset, 720p cap, MAX_VIDEO_SECONDS=' + MAX_VIDEO_SECONDS); }
 function buildArgs(input, output, body, info) {
   const task = String(body.task || 'convert');
@@ -529,7 +548,7 @@ function detectSceneChanges(input, duration) {
     });
   });
 }
-app.post('/api/audio-fingerprint', requireSession, analysisLimit, audioUpload.fields([{ name:'referenceAudio', maxCount:1 },{ name:'checkAudio', maxCount:1 }]), async (req,res) => {
+app.post('/api/audio-fingerprint', requireSession, trackFinish('audio-fingerprint','analysis'), analysisLimit, audioUpload.fields([{ name:'referenceAudio', maxCount:1 },{ name:'checkAudio', maxCount:1 }]), async (req,res) => {
   const files=req.files||{};let reference=files.referenceAudio?.[0],storedId=null;const check=files.checkAudio?.[0];
   if(!reference&&req.body.referenceUploadId){const stored=ownedUpload(req,req.body.referenceUploadId,'audio');if(stored){reference=stored.file;storedId=stored.record.id;}}
   if(!reference||!check){if(files.referenceAudio?.[0])safeDelete(files.referenceAudio[0].path);if(check)safeDelete(check.path);return res.status(400).json({error:'Upload the second audio file to compare with the selected source.'});}
@@ -543,7 +562,7 @@ app.post('/api/audio-fingerprint', requireSession, analysisLimit, audioUpload.fi
   finally{if(files.referenceAudio?.[0])safeDelete(files.referenceAudio[0].path);safeDelete(check.path);if(storedId)removeUpload(storedId);}
 });
 
-app.post('/api/video-fingerprint', requireSession, analysisLimit, videoPairUpload.fields([{name:'referenceVideo',maxCount:1},{name:'checkVideo',maxCount:1}]), async(req,res)=>{
+app.post('/api/video-fingerprint', requireSession, trackFinish('video-fingerprint','analysis'), analysisLimit, videoPairUpload.fields([{name:'referenceVideo',maxCount:1},{name:'checkVideo',maxCount:1}]), async(req,res)=>{
   const files=req.files||{};let reference=files.referenceVideo?.[0],storedId=null;const check=files.checkVideo?.[0];
   if(!reference&&req.body.referenceUploadId){const stored=ownedUpload(req,req.body.referenceUploadId,'video');if(stored){reference=stored.file;storedId=stored.record.id;}}
   if(!reference||!check){if(files.referenceVideo?.[0])safeDelete(files.referenceVideo[0].path);if(check)safeDelete(check.path);return res.status(400).json({error:'Upload the second video to compare with the selected source.'});}
@@ -557,7 +576,7 @@ app.post('/api/video-fingerprint', requireSession, analysisLimit, videoPairUploa
   finally{if(files.referenceVideo?.[0])safeDelete(files.referenceVideo[0].path);safeDelete(check.path);if(storedId)removeUpload(storedId);}
 });
 
-app.post('/api/photo-enhance', requireSession, mediaJobLimit, photoUpload.single('media'), async(req,res)=>{
+app.post('/api/photo-enhance', requireSession, trackFinish('photo-enhance','job'), mediaJobLimit, photoUpload.single('media'), async(req,res)=>{
   let source=req.file,storedId=null;if(!source&&req.body.uploadId){const stored=ownedUpload(req,req.body.uploadId,'photo');if(!stored)return res.status(404).json({error:'Uploaded photo not found or expired.'});source=stored.file;storedId=stored.record.id;}
   if(!source)return res.status(400).json({error:'Choose one photo first.'});
   const output=path.join(OUT_DIR,`${crypto.randomUUID()}.png`);let workDir=null,mode='local-conservative-fallback',confidence=0;
@@ -607,7 +626,7 @@ app.post('/api/photo-enhance', requireSession, mediaJobLimit, photoUpload.single
   finally{if(req.file)safeDelete(req.file.path);if(storedId)removeUpload(storedId);if(workDir)fs.rm(workDir,{recursive:true,force:true},()=>{});}
 });
 
-app.post('/api/media-details', requireSession, analysisLimit, upload.single('media'), async(req,res)=>{
+app.post('/api/media-details', requireSession, trackFinish('media-details','analysis'), analysisLimit, upload.single('media'), async(req,res)=>{
   let source=req.file,storedId=null;
   if(!source&&req.body.uploadId){const stored=ownedUpload(req,req.body.uploadId,'video');if(!stored)return res.status(404).json({error:'Uploaded video not found or expired.'});source=stored.file;storedId=stored.record.id;}
   if(!source)return res.status(400).json({error:'Choose a video first.'});
@@ -616,7 +635,7 @@ app.post('/api/media-details', requireSession, analysisLimit, upload.single('med
   finally{if(req.file)safeDelete(req.file.path);if(storedId)removeUpload(storedId);}
 });
 
-app.post('/api/ai-edit-plan', requireSession, analysisLimit, upload.single('media'), async (req, res) => {
+app.post('/api/ai-edit-plan', requireSession, trackFinish('ai-edit-plan','analysis'), analysisLimit, upload.single('media'), async (req, res) => {
   let workDir = null,sourceFile=req.file,storedUploadId=null;
   if(!sourceFile&&req.body.uploadId){const stored=ownedUpload(req,req.body.uploadId,'video');if(!stored)return res.status(404).json({error:'Uploaded video not found or expired.'});sourceFile=stored.file;storedUploadId=stored.record.id;}
   try {
@@ -982,7 +1001,7 @@ app.post('/api/ai-edit-plan', requireSession, analysisLimit, upload.single('medi
     if (workDir) fs.rm(workDir, { recursive: true, force: true }, () => {});
   }
 });
-app.post('/api/jobs', requireSession, mediaJobLimit, upload.single('media'), async (req,res) => {
+app.post('/api/jobs', requireSession, mediaJobLimit, upload.single('media'), trackFinish(req => String(req.body?.task||'job').slice(0,48),'job',{onlyFailures:true}), async (req,res) => {
   if (req.body.rightsConfirmed !== 'true') { if (req.file) safeDelete(req.file.path); return res.status(400).json({ error:'Confirm that you have permission to process this media.' }); }
   let sourceFile=req.file,storedUploadId=null;
   if(!sourceFile&&req.body.uploadId){const stored=ownedUpload(req,req.body.uploadId);if(!stored)return res.status(404).json({error:'Uploaded media not found or expired.'});sourceFile=stored.file;storedUploadId=stored.record.id;}
@@ -1102,6 +1121,7 @@ app.post('/api/jobs', requireSession, mediaJobLimit, upload.single('media'), asy
       if (mediaHasVideo && !(outputInfo.streams || []).some(x => x.codec_type === 'video')) throw new Error('The processing pipeline returned an output without a valid video stream.');
       if (!mediaHasVideo && !(outputInfo.streams || []).some(x => x.codec_type === 'audio')) throw new Error('The processing pipeline returned an output without a valid audio stream.');
       job.progress=100; job.status = 'completed'; job.output = output;
+      track('job',job.ownerId,{tool:task,status:'ok',ms:Date.now()-job.createdAt,bytes:sourceFile.size});
       job.autoEditInfo = autoEditInfo || job.visualChangeInfo || null;
       job.outputName = `${path.basename(sourceFile.originalname, path.extname(sourceFile.originalname)).replace(/[^a-z0-9_-]/gi,'_') || 'vidora-export'}${ext}`;
       const outputVideo = (outputInfo.streams || []).find(x => x.codec_type === 'video');
@@ -1115,7 +1135,7 @@ app.post('/api/jobs', requireSession, mediaJobLimit, upload.single('media'), asy
         outputVideoCodec:outputVideo?.codec_name || 'none', outputAudioCodec:outputAudio?.codec_name || 'none',
         outputHasAudio:Boolean(outputAudio)
       };
-    } catch (e) { job.status=job.cancelRequested?'cancelled':'failed'; job.error = job.cancelRequested?'Job cancelled by the user.':e.message; safeDelete(output); }
+    } catch (e) { job.status=job.cancelRequested?'cancelled':'failed'; job.error = job.cancelRequested?'Job cancelled by the user.':e.message; safeDelete(output); track('job',job.ownerId,{tool:task,status:job.status==='cancelled'?'cancelled':'failed',detail:job.error,ms:Date.now()-job.createdAt,bytes:sourceFile&&sourceFile.size}); }
     finally { job.child=null; job.input=null; safeDelete(sourceFile.path); }
   })();
 });
