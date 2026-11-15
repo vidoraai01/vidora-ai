@@ -12,7 +12,7 @@ const { spawn } = require('child_process');
 const { GoogleGenAI } = require('@google/genai');
 const { transformVideoWithRunway, cancelRunwayTask, MAX_RUNWAY_INPUT_BYTES, MAX_RUNWAY_DURATION_SECONDS } = require('./runway-video-provider');
 const { visualStyleFilters, createAutoEditRenderer } = require('./auto-edit-renderer');
-const { enhanceVideoFilters, voiceCleanFilters, isLocalLook, lookFilters, fallbackLookFor } = require('./free-effects');
+const { photoUltraFilters, enhanceVideoFilters, voiceCleanFilters, isLocalLook, lookFilters, fallbackLookFor } = require('./free-effects');
 const { transformVideoWithFreeProvider, transformWithGradio, isConfigured: gradioConfigured } = require('./free-video-provider');
 // Visual Change provider: free open-source Gradio/Hugging Face Space first, Runway (paid) only if configured.
 function visualProviderName(){const p=String(process.env.VISUAL_PROVIDER||'').toLowerCase();if(p==='runway')return process.env.RUNWAYML_API_SECRET?'runway':null;if(p==='free'||p==='huggingface')return process.env.HF_SPACE_URL?'free':null;return process.env.HF_SPACE_URL?'free':(process.env.RUNWAYML_API_SECRET?'runway':null);}
@@ -576,7 +576,7 @@ app.post('/api/photo-enhance', requireSession, mediaJobLimit, photoUpload.single
       finally{safeDelete(prepared);safeDelete(raw);}
     }
     let settings={sharpness:0.9,denoise:1.2,brightness:0,contrast:1.08,saturation:1.1,noEnhancementNeeded:false};
-    if(geminiAI){
+    if(geminiAI&&String(process.env.PHOTO_USE_GEMINI)==='true'){
       workDir=fs.mkdtempSync(path.join(os.tmpdir(),'vidora-photo-ai-'));
       const sample=path.join(workDir,'sample.png');
       await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',source.path,'-frames:v','1','-vf','scale=1024:1024:force_original_aspect_ratio=decrease:flags=area','-compression_level','6',sample],60000);
@@ -586,13 +586,14 @@ app.post('/api/photo-enhance', requireSession, mediaJobLimit, photoUpload.single
       if(parsedPhoto){const clamp=(v,min,max,fallback)=>{const n=Number(v);return Number.isFinite(n)?Math.min(max,Math.max(min,n)):fallback;};settings={sharpness:clamp(parsedPhoto.sharpness,0,1.5,0.4),denoise:clamp(parsedPhoto.denoise,0,2,1),brightness:clamp(parsedPhoto.brightness,-0.15,0.15,0),contrast:clamp(parsedPhoto.contrast,0.8,1.2,1),saturation:clamp(parsedPhoto.saturation,0.8,1.2,1),noEnhancementNeeded:parsedPhoto.noEnhancementNeeded===true};confidence=clamp(parsedPhoto.confidence,0,1,0);mode='gemini-guided-conventional-filters';}
       else console.warn('[Vidora Photo] Gemini assessment unavailable; using conservative local filters:',lastPhotoError?.message||'No valid model response.');
     }
-    if(settings.noEnhancementNeeded)settings={...settings,sharpness:0,denoise:0,brightness:0,contrast:1,saturation:1};
-    const vf=`hqdn3d=${settings.denoise}:${settings.denoise}:3:3,unsharp=5:5:${settings.sharpness}:3:3:${Math.min(0.4,settings.sharpness*0.25)},eq=brightness=${settings.brightness}:contrast=${settings.contrast}:saturation=${settings.saturation}`;
+    const ultra=photoUltraFilters(Number(process.env.PHOTO_MAX_SIDE)||(LOW_RESOURCE?2048:2560));
+    const vf=[ultra.cap,...ultra.pre,ultra.up,...ultra.post].join(',');
+    mode='local-ultra';confidence=1;
     const pixFmt=String((photoInfo.streams||[]).find(x=>x.codec_type==='video')?.pix_fmt||'');
     const hasAlpha=/^(?:yuva|gbrap|rgba|bgra|argb|abgr|ya\d|pal8)/i.test(pixFmt);
     const args=['-hide_banner','-loglevel','error','-y','-i',source.path];
-    if(hasAlpha){args.push('-filter_complex',`[0:v]split=2[base][alpha];[base]format=rgb24,${vf}[enh];[alpha]alphaextract[mask];[enh][mask]alphamerge,format=rgba[out]`,'-map','[out]');}
-    else args.push('-vf',vf);
+    if(hasAlpha){args.push('-filter_complex',`[0:v]split=2[base][alpha];[base]format=rgb24,${vf}[enh];[alpha]alphaextract,${ultra.cap},${ultra.up}[mask];[enh][mask]alphamerge,format=rgba[out]`,'-map','[out]');}
+    else args.push('-vf',`format=rgb24,${vf}`);
     args.push('-frames:v','1','-map_metadata','0','-compression_level','6',output);
     await run(FFMPEG,args,120000);
     res.setHeader('X-Vidora-AI-Mode',mode);res.setHeader('X-Vidora-AI-Confidence',String(confidence));
