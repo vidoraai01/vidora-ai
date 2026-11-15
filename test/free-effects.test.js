@@ -9,6 +9,14 @@ const fx = require('../free-effects');
 
 const hasFfmpeg = spawnSync('ffmpeg', ['-version']).status === 0;
 
+test('photo ultra filters', () => {
+  const u = fx.photoUltraFilters(2048);
+  assert.match(u.cap, /min\(iw,2048\)/); assert.match(u.up, /min\(iw\*2,2048\)/);
+  assert.ok(u.pre.some(f => f.startsWith('normalize=')) && u.pre.some(f => f.includes('independence=0')));
+  assert.ok(u.post.some(f => f.startsWith('cas=')));
+  assert.match(fx.photoUltraFilters(999999).cap, /4096/);
+});
+
 test('look helpers', () => {
   assert.equal(fx.isLocalLook('look-cartoon'), true);
   assert.equal(fx.isLocalLook('anime'), false);
