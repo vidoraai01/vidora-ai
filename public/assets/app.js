@@ -95,7 +95,7 @@
       }
       else {const result=await xhrUpload(endpoint,form,(loaded,total)=>{if(d.fingerprint){showUploadProgress(loaded,total);processingProgress(Math.max(1,Math.round(loaded/total*8)),'Uploading comparison file',`Uploading ${fmtBytes(loaded)} of ${fmtBytes(total)} · ${fmtBytes(total-loaded)} remaining`);}else processingProgress(12,d.analysis||d.aiEnhance?'AI assessment':'Inspecting media','Processing your validated source upload…');});responseData=result.data;state.jobId=responseData.id;state.uploadId=null;state.uploadMeta=null;if(!state.jobId)throw new Error('The server did not return a processing job ID.');$('cancelProcess').textContent='Cancel job';state.lastJobInfo=await pollJob(state.jobId);responseData={jobId:state.jobId};}
       processingProgress(100,'Completed','Processing finished. Preparing your result report…');
-      if(downloadBlob){state.downloadUrl=URL.createObjectURL(downloadBlob);state.downloadName='vidora-photo-enhanced.png';showResult({kind:'download',title:'Photo enhancement complete',message:state.photoMode==='neural-gradio'?'Enhanced PNG output is ready · AI model (free Hugging Face Space) was used. The image is processed at up to 1024 px on its longer side.':state.photoMode==='local-ultra'?'Enhanced PNG output is ready · Ultra HD pipeline: 2x upscale, auto-levels, denoise and detail sharpening (no AI model, your photo stays on this server).':state.photoMode==='gemini-guided-conventional-filters'?`Enhanced PNG output is ready · Gemini-guided conventional filters · assessment confidence ${Math.round((state.photoConfidence||0)*100)}%.`:'Enhanced PNG output is ready · Local conservative filters used because Gemini assessment was unavailable.',url:state.downloadUrl,name:state.downloadName});}
+      if(downloadBlob){state.downloadUrl=URL.createObjectURL(downloadBlob);state.downloadName='vidora-photo-enhanced.png';showResult({kind:'download',title:'Photo enhancement complete',message:state.photoMode==='neural-gradio'?'Enhanced PNG output is ready · AI model (free Hugging Face Space) was used. The AI step runs at up to 1024 px, then the result is upscaled and sharpened to full size.':state.photoMode==='local-ultra'?'Enhanced PNG output is ready · Ultra HD pipeline: 2x upscale, auto-levels, denoise and detail sharpening (no AI model, your photo stays on this server).':state.photoMode==='gemini-guided-conventional-filters'?`Enhanced PNG output is ready · Gemini-guided conventional filters · assessment confidence ${Math.round((state.photoConfidence||0)*100)}%.`:'Enhanced PNG output is ready · Local conservative filters used because Gemini assessment was unavailable.',url:state.downloadUrl,name:state.downloadName});}
       else if(d.fingerprint){showResult({kind:'report',title:'Fingerprint report ready',message:'Comparison completed. This is a technical similarity report, not a copyright or ownership verdict.',data:responseData,backOnly:true});}
       else if(d.details||(d.analysis&&!d.autoEdit)){showResult({kind:'report',title:d.details?'Media details report':'AI analysis report',message:d.analysis?'Visual assessment may be unavailable if Gemini is not configured or accessible. Check the method and confidence in the report.':'FFprobe media metadata report.',data:responseData});}
       else {const url=`/api/jobs/${encodeURIComponent(state.jobId)}/download`;const extra=(state.lastAiReport?` AI assessment: ${state.lastAiReport.analysisMode} · confidence ${Math.round((state.lastAiReport.confidence||0)*100)}%.` : '')+(state.lastJobInfo?.autoEditInfo?.reason?` ${state.lastJobInfo.autoEditInfo.reason}`:'')+(state.lastJobInfo?.autoEditInfo?.provider?` Transformation model: ${state.lastJobInfo.autoEditInfo.provider}.`:'');showResult({kind:'job',title:'Media processing complete',message:'Your output is ready for download.'+extra,url,name:'vidora-processed-media'});state.lastAiReport=null;}
@@ -117,4 +117,94 @@
   ['helpTop','helpUpload','helpTools'].forEach(id=>$(id).addEventListener('click',openHelp));$('closeHelp').addEventListener('click',()=>$('helpModal').classList.add('hidden'));$('helpModal').addEventListener('click',e=>{if(e.target===$('helpModal'))$('helpModal').classList.add('hidden');});
   $('sendHelp').addEventListener('click',async()=>{if(!state.user){setStatus('helpStatus','Sign in to send a report.');return;}const body=`[Help request] ${$('helpContext').textContent}\n${$('helpMessage').value.trim()}`;if(body.length<12){setStatus('helpStatus','Please describe the issue.');return;}try{const d=await api('/api/community/comments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({body,kind:'bug'})});setStatus('helpStatus',d.message||'Report submitted.',true);}catch(e){setStatus('helpStatus',e.message);}});
   if(resetToken)showPage(1);else checkSession();
+})();
+
+/* ===== Vidora UI extras: password show/hide, full-screen media viewer, 3D neural animation ===== */
+(function(){
+  'use strict';
+  const $=id=>document.getElementById(id);
+
+  /* 1) Show / hide password on every password field */
+  function addPasswordToggles(){
+    document.querySelectorAll('input[type="password"]').forEach(input=>{
+      if(input.dataset.pwToggle) return;
+      input.dataset.pwToggle='1';
+      const wrap=document.createElement('span');wrap.className='pw-wrap';
+      input.parentNode.insertBefore(wrap,input);wrap.append(input);
+      const btn=document.createElement('button');btn.type='button';btn.className='pw-toggle';btn.textContent='Show';btn.setAttribute('aria-label','Show password');btn.setAttribute('aria-pressed','false');
+      btn.addEventListener('click',e=>{e.preventDefault();const show=input.type==='password';input.type=show?'text':'password';btn.textContent=show?'Hide':'Show';btn.setAttribute('aria-label',show?'Hide password':'Show password');btn.setAttribute('aria-pressed',String(show));});
+      wrap.append(btn);
+    });
+  }
+  addPasswordToggles();
+
+  /* 2) Tap the result photo to open it full screen (tap again to zoom, drag to pan); video gets a full-screen button */
+  const box=document.createElement('div');box.className='lightbox hidden';box.setAttribute('role','dialog');box.setAttribute('aria-modal','true');box.setAttribute('aria-label','Photo viewer');
+  box.innerHTML='<button type="button" class="lightbox-close" aria-label="Close photo viewer">×</button><div class="lightbox-hint">Tap photo to zoom · tap × to close</div><div class="lightbox-scroll"><img alt="Full size preview"></div>';
+  document.body.append(box);
+  const bigImg=box.querySelector('img'),scroller=box.querySelector('.lightbox-scroll');
+  function openBox(src){bigImg.src=src;box.classList.remove('hidden','zoomed');document.body.classList.add('no-scroll');scroller.scrollTo(0,0);}
+  function closeBox(){box.classList.add('hidden');document.body.classList.remove('no-scroll');bigImg.removeAttribute('src');}
+  box.querySelector('.lightbox-close').addEventListener('click',closeBox);
+  scroller.addEventListener('click',e=>{if(e.target===scroller)closeBox();});
+  bigImg.addEventListener('click',()=>{box.classList.toggle('zoomed');});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!box.classList.contains('hidden'))closeBox();});
+  const preview=$('resultPreview');
+  if(preview){
+    preview.addEventListener('click',e=>{const img=e.target.closest&&e.target.closest('img');if(img&&img.src)openBox(img.src);});
+    new MutationObserver(()=>{
+      preview.querySelectorAll('img').forEach(img=>{img.classList.add('tap-open');img.title='Tap to open full screen';});
+      const video=preview.querySelector('video');
+      if(video&&!preview.querySelector('.fs-btn')){const b=document.createElement('button');b.type='button';b.className='outline-btn fs-btn';b.textContent='⤢ Full screen';b.addEventListener('click',()=>{const f=video.requestFullscreen||video.webkitRequestFullscreen||video.webkitEnterFullscreen;if(f)f.call(video);});preview.append(b);}
+    }).observe(preview,{childList:true});
+  }
+
+  /* 3) 3D neural animation on the processing page: rotating knot + gyroscope rings + neural sphere, colours keep shifting */
+  const stage=document.querySelector('.brain-stage'),page4=$('page4');
+  if(!stage||!page4) return;
+  const canvas=document.createElement('canvas');canvas.className='neuro3d';canvas.setAttribute('aria-hidden','true');stage.prepend(canvas);stage.classList.add('is3d');
+  const ctx=canvas.getContext('2d');if(!ctx) return;
+  const reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let W=0,H=0,dpr=1;
+  function resize(){dpr=Math.min(2,window.devicePixelRatio||1);W=stage.clientWidth;H=stage.clientHeight;canvas.width=Math.max(1,Math.round(W*dpr));canvas.height=Math.max(1,Math.round(H*dpr));ctx.setTransform(dpr,0,0,dpr,0,0);}
+  resize();if(window.ResizeObserver)new ResizeObserver(resize).observe(stage);else window.addEventListener('resize',resize);
+
+  const knot=[];for(let i=0;i<560;i++){const t=i/560*Math.PI*2*1,p=2,q=3,r=Math.cos(q*t)+2.1;knot.push([r*Math.cos(p*t)*.36,r*Math.sin(p*t)*.36,-Math.sin(q*t)*.36*1.15,i/560]);}
+  const sphere=[];const N=170,ga=Math.PI*(3-Math.sqrt(5));for(let i=0;i<N;i++){const y=1-(i/(N-1))*2,rad=Math.sqrt(1-y*y),th=ga*i;sphere.push([Math.cos(th)*rad*.62,y*.62,Math.sin(th)*rad*.62]);}
+  const edges=[];for(let i=0;i<N;i++){const near=[];for(let j=i+1;j<N;j++){const dx=sphere[i][0]-sphere[j][0],dy=sphere[i][1]-sphere[j][1],dz=sphere[i][2]-sphere[j][2],d=dx*dx+dy*dy+dz*dz;if(d<.115)near.push([d,j]);}near.sort((a,b)=>a[0]-b[0]).slice(0,3).forEach(n=>edges.push([i,n[1]]));}
+  const rings=[0,1,2].map(k=>{const pts=[];for(let i=0;i<84;i++){const a=i/84*Math.PI*2;pts.push([Math.cos(a)*(1.02+k*.09),Math.sin(a)*(1.02+k*.09),0]);}return pts;});
+  const pulses=[];for(let i=0;i<14;i++)pulses.push({e:(Math.random()*edges.length)|0,t:Math.random(),s:.4+Math.random()*.9});
+
+  function rot(p,ax,ay,az){let [x,y,z]=p,c=Math.cos(ax),s=Math.sin(ax),y1=y*c-z*s,z1=y*s+z*c;y=y1;z=z1;c=Math.cos(ay);s=Math.sin(ay);const x1=x*c+z*s;z1=-x*s+z*c;x=x1;z=z1;c=Math.cos(az);s=Math.sin(az);const x2=x*c-y*s;y1=x*s+y*c;return [x2,y1,z];}
+  function proj(v,R,cx,cy){const f=3.2/(3.2-v[2]);return [cx+v[0]*R*f,cy+v[1]*R*f,f];}
+
+  let last=0,tm=0,rafId=0;
+  function frame(now){
+    rafId=0;
+    const active=page4.classList.contains('active')&&!document.hidden;
+    if(!active){rafId=setTimeout(()=>{rafId=requestAnimationFrame(frame);},300);return;}
+    const dt=Math.min(.05,(now-last)/1000||.016);last=now;tm+=dt;
+    const R=Math.min(W,H)*.31,cx=W/2,cy=H/2-4,hue=(tm*38)%360;
+    ctx.globalCompositeOperation='destination-out';ctx.fillStyle='rgba(0,0,0,.24)';ctx.fillRect(0,0,W,H);
+    ctx.globalCompositeOperation='lighter';
+    const shake=(Math.sin(tm*7)*.012+Math.sin(tm*13.3)*.007);
+    const ax=tm*.55+shake,ay=tm*.8,az=tm*.23;
+
+    // neural sphere edges
+    ctx.lineWidth=1;
+    const sp=sphere.map(p=>proj(rot(p,-ax*.6,ay*.7+1,az),R,cx,cy)),sv=sphere.map(p=>rot(p,-ax*.6,ay*.7+1,az));
+    for(let i=0;i<edges.length;i++){const a=sp[edges[i][0]],b=sp[edges[i][1]],d=(sv[edges[i][0]][2]+1.2)/2.4;ctx.strokeStyle='hsla('+((hue+i*2.2)%360)+',100%,62%,'+(0.10+d*0.32).toFixed(3)+')';ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();}
+    for(let i=0;i<sp.length;i++){const d=(sv[i][2]+1.2)/2.4;ctx.fillStyle='hsla('+((hue+i*3)%360)+',100%,70%,'+(0.25+d*0.6).toFixed(3)+')';ctx.beginPath();ctx.arc(sp[i][0],sp[i][1],(1+d*1.6)*sp[i][2]*.9,0,6.283);ctx.fill();}
+    // energy pulses travelling along edges
+    for(const p of pulses){p.t+=dt*p.s;if(p.t>=1){p.t=0;p.e=(Math.random()*edges.length)|0;}const a=sp[edges[p.e][0]],b=sp[edges[p.e][1]],x=a[0]+(b[0]-a[0])*p.t,y=a[1]+(b[1]-a[1])*p.t,g=ctx.createRadialGradient(x,y,0,x,y,11);g.addColorStop(0,'hsla('+((hue+180)%360)+',100%,88%,.95)');g.addColorStop(1,'hsla('+((hue+180)%360)+',100%,60%,0)');ctx.fillStyle=g;ctx.beginPath();ctx.arc(x,y,11,0,6.283);ctx.fill();}
+    // torus knot particle ribbon
+    const k2=knot.map(p=>{const v=rot(p,ax*1.3,ay*1.1,az*1.6),pr=proj(v,R*1.0,cx,cy);return [pr[0],pr[1],pr[2],p[3],v[2]];});
+    for(let i=0;i<k2.length;i++){const q=k2[i],d=(q[4]+1.6)/3.2,h=(hue+q[3]*360+tm*30)%360;ctx.fillStyle='hsla('+h+',100%,'+(55+d*18).toFixed(0)+'%,'+(0.35+d*0.6).toFixed(3)+')';ctx.beginPath();ctx.arc(q[0],q[1],(0.9+d*2.1)*q[2]*.85,0,6.283);ctx.fill();}
+    // gyroscope rings
+    rings.forEach((ring,k)=>{const ex=tm*(.9+k*.35)*(k%2?-1:1),ey=tm*(.6+k*.25),ez=k*1.1;ctx.lineWidth=1.6;ctx.beginPath();ring.forEach((p,i)=>{const v=rot(p,ex+ez,ey,k*.7),pr=proj(v,R*1.02,cx,cy);if(i)ctx.lineTo(pr[0],pr[1]);else ctx.moveTo(pr[0],pr[1]);});ctx.closePath();ctx.strokeStyle='hsla('+((hue+k*120+60)%360)+',100%,64%,.55)';ctx.stroke();});
+    // central glow that breathes with colour
+    const gl=ctx.createRadialGradient(cx,cy,0,cx,cy,R*.9);gl.addColorStop(0,'hsla('+((hue+300)%360)+',100%,60%,'+(0.16+Math.sin(tm*2.2)*.06).toFixed(3)+')');gl.addColorStop(1,'hsla('+hue+',100%,50%,0)');ctx.fillStyle=gl;ctx.fillRect(0,0,W,H);
+    if(!reduce)rafId=requestAnimationFrame(frame);
+  }
+  if(reduce){frame(0);window.addEventListener('resize',()=>frame(performance.now()));}else rafId=requestAnimationFrame(frame);
 })();
