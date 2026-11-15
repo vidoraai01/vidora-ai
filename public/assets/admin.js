@@ -117,16 +117,18 @@
   function userRow(u) {
     const body = h('div', { class: 'uact' }, h('div', { class: 'empty', text: 'Loading activity…' }));
     const row = h('div', { class: 'urow' });
+    const rb = h('div', { class: 'uact' });
+    const extra = h('div', null, body, h('button', { class: 'outline-btn', type: 'button', text: 'Password reset link banao', onclick: () => makeLink(u, rb) }), rb);
     const head = h('button', { class: 'uhead', type: 'button', 'aria-expanded': 'false', onclick: async () => {
       const open = row.classList.toggle('open'); head.setAttribute('aria-expanded', String(open));
-      if (!open) { body.remove(); return; } row.append(body);
+      if (!open) { extra.remove(); return; } row.append(extra);
       try {
         const { events } = await api('/api/admin/users/' + encodeURIComponent(u.id) + '/activity');
         body.replaceChildren(events.length ? h('ul', { class: 'fails' }, events.map(e => h('li', null, h('b', { text: e.kind + (e.tool ? ' · ' + e.tool : '') }), ' · ', h('span', { class: e.status === 'failed' ? 'pill-bad' : e.status === 'ok' ? 'pill-ok' : '', text: e.status || '' }), ' · ', when(e.created_at), e.bytes ? ' · ' + bytes(e.bytes) : '', e.ms ? ' · ' + dur(e.ms) : '', e.detail ? h('br') : null, e.detail ? e.detail.slice(0, 200) : null, e.cause ? h('br') : null, e.cause ? '→ ' + e.cause : null))) : h('div', { class: 'empty', text: 'Is user ki koi activity record nahi hui.' }));
       } catch (e) { body.replaceChildren(h('div', { class: 'empty', text: e.message })); }
     } },
       h('div', null, h('div', { class: 'uname', text: u.name }), h('div', { class: 'umail', text: u.email })),
-      h('div', { class: 'chips' }, h('span', { text: 'Joined ' + when(u.joinedAt) }), h('span', { text: 'Last seen ' + ago(u.lastSeen) }), h('span', { text: u.logins + ' sign-ins' }), h('span', { text: u.uploads + ' uploads' }), h('span', { text: u.runs + ' runs' }), u.failures ? h('span', { class: 'bad', text: u.failures + ' failed' }) : null, u.openReports ? h('span', { class: 'warn', text: u.openReports + ' open report' + (u.openReports > 1 ? 's' : '') }) : null));
+      h('div', { class: 'chips' }, h('span', { text: 'Joined ' + when(u.joinedAt) }), h('span', { text: 'Last seen ' + ago(u.lastSeen) }), h('span', { text: u.totalLogins + ' sign-ins total' }), h('span', { text: u.uploads + ' uploads' }), h('span', { text: u.runs + ' runs' }), u.failures ? h('span', { class: 'bad', text: u.failures + ' failed' }) : null, u.openReports ? h('span', { class: 'warn', text: u.openReports + ' open report' + (u.openReports > 1 ? 's' : '') }) : null));
     row.append(head); return row;
   }
 
@@ -145,6 +147,41 @@
     const cells = [['Uptime', uptime(s.uptimeSeconds)], ['Memory used', s.rssMB + ' MB' + (s.memoryLimitMB ? ' / ' + s.memoryLimitMB + ' MB' : '')], ['Active jobs now', String(s.activeJobs)], ['Files waiting', String(s.heldUploads)], ['Low-resource mode', s.lowResource ? 'ON' : 'off'], ['Max video length', s.maxVideoSeconds + ' s'],
       ['Visual Change', s.providers.visualChange], ['Photo AI (Space)', yn(s.providers.photoAI)], ['Video Enhance AI', yn(s.providers.videoEnhanceAI)], ['Gemini', yn(s.providers.gemini)], ['Reset e-mail', yn(s.providers.resetEmail)], ['Node', s.node]];
     return h('section', { class: 'adm-card' }, h('h2', { text: 'Server health' }), h('p', { class: 'hint', text: 'Memory limit ke kareeb ho to Render crash/502 deta hai.' }), h('div', { class: 'sys' }, cells.map(([a, b]) => h('div', null, a, h('b', { text: b })))));
+  }
+
+  const PROV = { gmail: 'Gmail', outlook: 'Outlook / Hotmail', yahoo: 'Yahoo', icloud: 'iCloud', other: 'Other email' };
+  function lifetimeSection(d) {
+    const l = d.lifetime, guests = l.guestVisits;
+    const tot = Math.max(1, l.users);
+    const rows = d.providers.map(p => h('tr', null, h('td', { text: PROV[p.provider] || p.provider }), h('td', { class: 'num', text: num(p.users) }), h('td', { class: 'num', text: num(p.signedIn) }), h('td', { class: 'num', text: num(p.signIns) }), h('td', { class: 'num', text: Math.round(p.users / tot * 100) + '%' })));
+    if (guests) rows.push(h('tr', null, h('td', { text: 'Guest (bina login)' }), h('td', { class: 'num', text: '—' }), h('td', { class: 'num', text: '—' }), h('td', { class: 'num', text: num(guests) + ' visits' }), h('td', { class: 'num', text: '' })));
+    return h('section', { class: 'adm-card' }, h('h2', { text: 'Lifetime (hamesha ke liye)' }), h('p', { class: 'hint', text: 'Ye ginti kabhi delete nahi hoti, chahe purani activity saaf ho jaye.' }),
+      h('div', { class: 'kpis' },
+        kpi('Total users', num(l.users), l.firstUserAt ? 'pehla user ' + when(l.firstUserAt) : ''),
+        kpi('Kitno ne login kiya', num(l.everSignedIn), 'kam se kam ek baar'),
+        kpi('Total sign-ins', num(l.signIns), 'abhi tak ke saare'),
+        kpi('Guest visits', num(guests), 'bina login ke aaye'),
+        kpi('Total uploads', num(l.uploads), bytes(l.uploadBytes)),
+        kpi('Tool runs', num(l.runsOk + l.runsFailed), num(l.runsOk) + ' safal · ' + num(l.runsFailed) + ' fail')),
+      h('h3', { text: 'Kis email se aaye' }),
+      h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Provider', 'Users', 'Login kiya', 'Sign-ins', 'Share'].map((t, i) => h('th', { class: i ? 'num' : '', text: t })))), h('tbody', null, rows))));
+  }
+
+  async function makeLink(u, box) {
+    try {
+      const r = await api('/api/admin/users/' + encodeURIComponent(u.id) + '/reset-link', { method: 'POST' });
+      const inp = h('input', { type: 'text', readonly: true, value: r.link, 'aria-label': 'Reset link' });
+      box.replaceChildren(h('div', { class: 'hint', text: r.user.email + ' ke liye link (' + r.expiresInMinutes + ' min valid, sirf ek baar chalega). WhatsApp par bhejo:' }), inp,
+        h('button', { class: 'primary-btn', type: 'button', text: 'Copy link', onclick: async () => { try { await navigator.clipboard.writeText(r.link); toast('Link copy ho gaya.'); } catch { inp.focus(); inp.select(); toast('Link select kiya, copy karo.'); } } }));
+      load(true);
+    } catch (e) { toast(e.message); }
+  }
+
+  function resetSection(d) {
+    if (!d.resetRequests.length) return null;
+    return h('section', { class: 'adm-card' }, h('h2', { text: 'Password reset requests (' + d.resetRequests.length + ')' }),
+      h('p', { class: 'hint', text: 'In users ne "Forgot password" dabaya par email nahi ja saki. Link banao aur unhe WhatsApp/DM se bhejo.' }),
+      d.resetRequests.map(r => { const box = h('div', { class: 'uact' }); return h('div', { class: 'urow open' }, h('div', { class: 'uhead' }, h('div', null, h('div', { class: 'uname', text: r.name }), h('div', { class: 'umail', text: r.email }), h('div', { class: 'umail', text: when(r.at) + ' · ' + (r.detail || r.status) })), h('button', { class: 'primary-btn', type: 'button', text: 'Reset link banao', onclick: () => makeLink({ id: r.userId }, box) })), box); }));
   }
 
   function render() {
@@ -166,7 +203,7 @@
         kpi('Failures', num(fails), num(k.runsFailed) + ' tool + ' + num(k.uploadFailures) + ' upload', fails ? 'bad' : 'good'),
         kpi('Open reports', num(k.openReports), num(k.openHigh) + ' high priority', k.openHigh ? 'bad' : k.openReports ? 'warn' : 'good')),
       h('section', { class: 'adm-card' }, h('h2', { text: 'Activity' }), h('p', { class: 'hint', text: 'Bar par tap/hover karo to us din ke numbers dikhenge.' }), chart(d.series, d.unit)),
-      reportsSection(d), errorsSection(d), toolsSection(d), usersSection(d), systemSection(d));
+      lifetimeSection(d), resetSection(d), reportsSection(d), errorsSection(d), toolsSection(d), usersSection(d), systemSection(d));
     window.scrollTo(0, keep);
   }
 
