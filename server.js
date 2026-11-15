@@ -409,7 +409,7 @@ app.locals.systemInfo = () => ({
   uptimeSeconds: Math.round(process.uptime()), rssMB: Math.round(process.memoryUsage().rss / 1048576), node: process.version,
   lowResource: LOW_RESOURCE, maxVideoSeconds: MAX_VIDEO_SECONDS, memoryLimitMB: detectedMemoryLimitMB(),
   activeJobs: [...jobs.values()].filter(j => j.status === 'processing').length, heldUploads: uploads.size,
-  providers: { visualChange: visualProviderName() || 'none (instant looks only)', photoAI: gradioConfigured('PHOTO'), videoEnhanceAI: gradioConfigured('VENH'), gemini: Boolean(geminiAI), resetEmail: Boolean(process.env.RESEND_API_KEY) }
+  providers: { visualChange: visualProviderName() || 'none (instant looks only)', photoAI: gradioConfigured('PHOTO'), videoEnhanceAI: gradioConfigured('VENH'), gemini: Boolean(geminiAI), resetEmail: require('./mailer').isConfigured() }
 });
 if (LOW_RESOURCE) { process.env.X264_PRESET = 'veryfast'; console.log('[Vidora] Low-resource mode: veryfast preset, 720p cap, MAX_VIDEO_SECONDS=' + MAX_VIDEO_SECONDS); }
 function buildArgs(input, output, body, info) {

@@ -32,13 +32,18 @@ function setupAuthSupport(app) {
   const origin = (req,res,next) => { const o=req.get('origin'); if(o){try{if(new URL(o).host!==req.get('host'))return res.status(403).json({error:'Origin rejected.'});}catch{return res.status(403).json({error:'Invalid origin.'});}} next(); };
   const setSession = (req,res,next,account,status=200) => req.session.regenerate(err=>{if(err)return next(err);req.session.account=account;req.session.save(e=>e?next(e):res.status(status).json({user:account}));});
 
-  const track=require('./analytics').setupAnalytics(app,pool,{user,admin,readLimit});
+  const guestLimit=require('express-rate-limit')({windowMs:10*60*1000,limit:20,standardHeaders:true,legacyHeaders:false});
+  const track=require('./analytics').setupAnalytics(app,pool,{user,admin,readLimit,origin,guestLimit});
+  const mailer=require('./mailer');
+  const baseUrl=()=>process.env.APP_BASE_URL||process.env.RENDER_EXTERNAL_URL||'';
+  const newResetToken=async userId=>{const token=crypto.randomBytes(32).toString('base64url'),tokenHash=crypto.createHash('sha256').update(token).digest('hex');await pool.query('DELETE FROM vidora_password_resets WHERE expires_at<NOW() OR used_at IS NOT NULL');await pool.query("INSERT INTO vidora_password_resets(user_id,token_hash,expires_at) VALUES($1,$2,NOW()+INTERVAL '30 minutes')",[userId,tokenHash]);return{token,tokenHash};};
+  const resetLink=(base,token)=>{const l=new URL('/',base);l.hash='reset='+encodeURIComponent(token);return l.toString();};
   app.get('/api/auth/me',readLimit,(req,res)=>res.set('Cache-Control','no-store').json({user:req.session.account||null}));
   app.post('/api/auth/signup',authLimit,origin,async(req,res,next)=>{try{
     const name=String(req.body.name||'').trim().slice(0,60), email=String(req.body.email||'').trim().toLowerCase(), password=String(req.body.password||'');
     if(email===String(process.env.ADMIN_EMAIL).trim().toLowerCase())return res.status(403).json({error:'This address is reserved for the administrator.'});
     if(name.length<2||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254||password.length<10||password.length>72)return res.status(400).json({error:'Enter a valid name/email and a 10–72 character password.'});
-    const hash=await bcrypt.hash(password,12);const q=await pool.query('INSERT INTO vidora_users(name,email,password_hash) VALUES($1,$2,$3) RETURNING id,name,email',[name,email,hash]);
+    const hash=await bcrypt.hash(password,12);const q=await pool.query('INSERT INTO vidora_users(name,email,password_hash,login_count,last_login_at) VALUES($1,$2,$3,1,now()) RETURNING id,name,email',[name,email,hash]);
     track('signup',{userId:q.rows[0].id,status:'ok'});
     setSession(req,res,next,{id:q.rows[0].id,name,email,role:'user'},201);
   }catch(e){if(e.code==='23505')return res.status(409).json({error:'An account with this email already exists.'});next(e);}});
@@ -54,25 +59,41 @@ function setupAuthSupport(app) {
     track('login',{userId:r.id,status:'ok'});
     setSession(req,res,next,{id:r.id,name:r.name,email:r.email,role:'user'});
   }catch(e){next(e);}});
-  app.post('/api/auth/forgot-password',resetLimit,origin,async(req,res,next)=>{
-    const generic='If the account exists and password-reset email is configured, a reset link will be sent.';
+  app.post('/api/auth/forgot-password',resetLimit,origin,async(req,res)=>{
+    const ready=mailer.isConfigured()&&Boolean(baseUrl());
+    const sentMsg='Agar is email se account hai to reset link bhej diya gaya hai (30 minute valid). Inbox ke saath Spam/Promotions folder bhi dekho.';
+    const offMsg='Email service abhi set nahi hai, isliye link email se nahi bhej sakte. Help section me message bhejo ya owner se contact karo — owner aapko reset link dega.';
     try{
       const email=String(req.body.email||'').trim().toLowerCase();
-      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254)return res.json({ok:true,message:generic});
-      if(email===String(process.env.ADMIN_EMAIL).trim().toLowerCase())return res.json({ok:true,message:generic});
-      const q=await pool.query('SELECT id,email FROM vidora_users WHERE email=$1',[email]);
-      if(!q.rowCount||!process.env.RESEND_API_KEY||!process.env.RESEND_FROM||!process.env.APP_BASE_URL)return res.json({ok:true,message:generic});
-      const base=new URL(process.env.APP_BASE_URL);
+      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254||email===String(process.env.ADMIN_EMAIL).trim().toLowerCase())return res.json({ok:true,emailEnabled:ready,message:ready?sentMsg:offMsg});
+      const q=await pool.query('SELECT id FROM vidora_users WHERE email=$1',[email]);
+      if(!q.rowCount)return res.json({ok:true,emailEnabled:ready,message:ready?sentMsg:offMsg});
+      const uid=q.rows[0].id;
+      if(!ready){track('reset_request',{userId:uid,status:'pending',detail:'email service not configured'});return res.json({ok:true,emailEnabled:false,message:offMsg});}
+      const base=new URL(baseUrl());
       if(process.env.NODE_ENV==='production'&&base.protocol!=='https:')throw new Error('APP_BASE_URL must use HTTPS in production.');
-      const token=crypto.randomBytes(32).toString('base64url'),tokenHash=crypto.createHash('sha256').update(token).digest('hex');
-      await pool.query('DELETE FROM vidora_password_resets WHERE expires_at<NOW() OR used_at IS NOT NULL');
-      await pool.query("INSERT INTO vidora_password_resets(user_id,token_hash,expires_at) VALUES($1,$2,NOW()+INTERVAL '30 minutes')",[q.rows[0].id,tokenHash]);
-      const link=new URL('/',base);link.hash='reset='+encodeURIComponent(token);
-      const sent=await fetch('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${process.env.RESEND_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({from:process.env.RESEND_FROM,to:[email],subject:'Reset your Vidora AI password',html:`<p>A password reset was requested for your Vidora AI account.</p><p><a href="${link.toString()}">Reset password</a></p><p>This link expires in 30 minutes. If you did not request it, ignore this email.</p>`}),signal:AbortSignal.timeout(15000)});
-      if(!sent.ok){await pool.query('DELETE FROM vidora_password_resets WHERE token_hash=$1',[tokenHash]);console.error('[Vidora] Password reset email provider rejected the request:',sent.status);return res.json({ok:true,message:generic});}
-      res.json({ok:true,message:generic});
-    }catch(e){console.error('[Vidora] Password reset request failed:',e.message);res.json({ok:true,message:generic});}
+      const {token,tokenHash}=await newResetToken(uid);
+      const link=resetLink(base,token);
+      try{
+        await mailer.sendMail({to:email,subject:'Vidora AI password reset',html:`<p>Aapke Vidora AI account ka password reset karne ki request aayi hai.</p><p><a href="${link}">Password reset karo</a></p><p>Ye link 30 minute me expire ho jayega. Agar aapne request nahi ki to is email ko ignore karo.</p>`,text:`Reset your Vidora AI password (valid 30 minutes): ${link}`});
+        track('reset_request',{userId:uid,status:'ok',detail:'email sent'});
+      }catch(e){
+        await pool.query('DELETE FROM vidora_password_resets WHERE token_hash=$1',[tokenHash]).catch(()=>{});
+        console.error('[Vidora] Password reset email failed:',e.message);
+        track('reset_request',{userId:uid,status:'failed',detail:e.message});
+        return res.json({ok:true,emailEnabled:false,message:offMsg});
+      }
+      res.json({ok:true,emailEnabled:true,message:sentMsg});
+    }catch(e){console.error('[Vidora] Password reset request failed:',e.message);res.json({ok:true,emailEnabled:false,message:offMsg});}
   });
+  app.post('/api/admin/users/:id/reset-link',user,admin,origin,async(req,res,next)=>{try{
+    if(!/^\d{1,18}$/.test(req.params.id))return res.status(400).json({error:'Invalid user id.'});
+    const q=await pool.query('SELECT id,name,email FROM vidora_users WHERE id=$1 AND email<>$2',[req.params.id,String(process.env.ADMIN_EMAIL).trim().toLowerCase()]);
+    if(!q.rowCount)return res.status(404).json({error:'User not found.'});
+    const {token}=await newResetToken(q.rows[0].id);
+    track('reset_link',{userId:q.rows[0].id,status:'ok',detail:'created by owner'});
+    res.set('Cache-Control','no-store').json({link:resetLink(baseUrl()||`${req.protocol}://${req.get('host')}`,token),expiresInMinutes:30,user:{name:q.rows[0].name,email:q.rows[0].email}});
+  }catch(e){next(e);}});
   app.post('/api/auth/reset-password',resetLimit,origin,async(req,res,next)=>{
     const token=String(req.body.token||''),password=String(req.body.password||'');
     if(!/^[A-Za-z0-9_-]{40,60}$/.test(token)||password.length<10||password.length>72)return res.status(400).json({error:'The reset link or new password is invalid.'});
