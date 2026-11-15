@@ -563,13 +563,18 @@ app.post('/api/photo-enhance', requireSession, mediaJobLimit, photoUpload.single
   const output=path.join(OUT_DIR,`${crypto.randomUUID()}.png`);let workDir=null,mode='local-conservative-fallback',confidence=0;
   try{
     const photoInfo=await validateMedia(source,'photo',0);
-    if(gradioConfigured('PHOTO')){
+    if(String(process.env.PHOTO_NEURAL||'').toLowerCase()!=='off'&&gradioConfigured('PHOTO')){
       // Neural enhancement through a free Gradio/Hugging Face Space. Any failure falls back to the local filters below.
       const prepared=path.join(OUT_DIR,`${crypto.randomUUID()}.photo-in.png`),raw=path.join(OUT_DIR,`${crypto.randomUUID()}.photo-out.bin`);
       try{
         await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',source.path,'-frames:v','1','-vf','scale=min(1024\\,iw):min(1024\\,ih):force_original_aspect_ratio=decrease:flags=lanczos,format=rgb24',prepared],60000);
         await transformWithGradio({prefix:'PHOTO',inputPath:prepared,outputPath:raw,mime:'image/png',maxWaitMs:Math.max(30000,Number(process.env.PHOTO_MAX_WAIT_MS)||90000),label:'free photo AI server'});
-        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1',output],60000);
+        // The AI step runs at <=1024 px. Bring the result back up to (at least) full size and finish with a detail sharpen.
+        const srcVideo=(photoInfo.streams||[]).find(x=>x.codec_type==='video')||{};
+        const origLong=Math.max(Number(srcVideo.width)||0,Number(srcVideo.height)||0)||1024;
+        const maxSide=Number(process.env.PHOTO_MAX_SIDE)||(LOW_RESOURCE?2048:2560);
+        const target=Math.max(512,Math.min(maxSide,origLong*2));
+        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1','-vf',`scale='if(gte(iw,ih),${target},-2)':'if(gte(iw,ih),-2,${target})':flags=lanczos,unsharp=5:5:0.7:5:5:0,cas=strength=0.35,eq=contrast=1.03`,output],120000);
         res.setHeader('X-Vidora-AI-Mode','neural-gradio');res.setHeader('X-Vidora-AI-Confidence','1');
         return res.download(output,'vidora-photo-enhanced.png',()=>safeDelete(output));
       }catch(e){console.warn('[Vidora Photo] Neural photo enhancement failed; using local filters:',e.message);safeDelete(output);}
