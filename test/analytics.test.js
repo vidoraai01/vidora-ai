@@ -15,7 +15,8 @@ test('explainError gives a cause and a fix for common failures', () => {
 
 test('track never throws and sanitises its input', async () => {
   const calls = [];
-  const pool = { query: (sql, params) => { calls.push(params); return Promise.resolve({}); } };
+  const all = [];
+  const pool = { query: (sql, params) => { all.push([sql, params]); if (/INSERT INTO vidora_events/.test(sql)) calls.push(params); return Promise.resolve({}); } };
   const track = makeTrack(pool);
   track('login', { userId: '42', status: 'ok' });
   track('job', { userId: 'abc; DROP TABLE x', tool: 'x'.repeat(200), status: 'failed', detail: 'line1\n\n   line2 ' + 'z'.repeat(500), bytes: 12.7, ms: 'nope' });
@@ -36,4 +37,16 @@ test('track never throws and sanitises its input', async () => {
 test('schema creates the events table and indexes', () => {
   assert.match(EVENTS_SCHEMA, /CREATE TABLE IF NOT EXISTS vidora_events/);
   assert.match(EVENTS_SCHEMA, /vidora_events_created_idx/);
+});
+
+test('lifetime counters and login_count are bumped by track', () => {
+  const all = [];
+  const track = makeTrack({ query: (sql, params) => { all.push([sql, params]); return Promise.resolve({}); } });
+  track('login', { userId: 7, status: 'ok' });
+  track('guest', { status: 'ok' });
+  track('upload', { status: 'ok', bytes: 1000 });
+  track('job', { status: 'failed' });
+  const names = all.filter(([q]) => /vidora_counters/.test(q)).map(([, p]) => p[0]);
+  assert.deepEqual(names, ['guest_visits', 'uploads', 'upload_bytes', 'runs_failed']);
+  assert.ok(all.some(([q, p]) => /login_count=login_count\+1/.test(q) && p[0] === '7'));
 });
