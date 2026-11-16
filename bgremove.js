@@ -41,12 +41,14 @@ const median = arr => { const a = Float64Array.from(arr).sort(); return a[a.leng
 
 // Returns { mask: Uint8Array (1 = keep, 0 = background), w, h, fraction (kept share), removedPct }.
 function buildMask(img, tolerance) {
-  const { w, h, data } = img, N = w * h, gTol = tolerance, sTol = 11;
+  const { w, h, data } = img, N = w * h, gTol = tolerance, sTol = 6;
   const band = Math.max(1, Math.round(Math.min(w, h) * 0.012));
   const R = [], G = [], B = [];
   const take = i => { R.push(data[i * 3]); G.push(data[i * 3 + 1]); B.push(data[i * 3 + 2]); };
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (x < band || y < band || x >= w - band || y >= h - band) take(y * w + x);
   const ref = [median(R), median(G), median(B)];
+  const sd = a => { const m = a.reduce((x, y) => x + y, 0) / a.length; return Math.sqrt(a.reduce((x, y) => x + (y - m) * (y - m), 0) / a.length); };
+  const borderSpread = (sd(R) + sd(G) + sd(B)) / 3;
   const dRef = i => Math.hypot(data[i * 3] - ref[0], data[i * 3 + 1] - ref[1], data[i * 3 + 2] - ref[2]);
   const dPix = (i, j) => Math.hypot(data[i * 3] - data[j * 3], data[i * 3 + 1] - data[j * 3 + 1], data[i * 3 + 2] - data[j * 3 + 2]);
   const bg = new Uint8Array(N), queue = new Int32Array(N);
@@ -56,7 +58,7 @@ function buildMask(img, tolerance) {
   for (let y = 0; y < h; y++) { seed(y * w); seed(y * w + w - 1); }
   while (qh < qt) {
     const i = queue[qh++], x = i % w, y = (i - x) / w;
-    const tryAdd = j => { if (bg[j]) return; const dr = dRef(j); if (dr <= gTol || (dr <= gTol * 2.2 && dPix(i, j) <= sTol)) { bg[j] = 1; queue[qt++] = j; } };
+    const tryAdd = j => { if (bg[j]) return; const dr = dRef(j); if (dr <= gTol || (dr <= gTol * 1.5 && dPix(i, j) <= sTol)) { bg[j] = 1; queue[qt++] = j; } };
     if (x > 0) tryAdd(i - 1); if (x < w - 1) tryAdd(i + 1); if (y > 0) tryAdd(i - w); if (y < h - 1) tryAdd(i + w);
   }
   // Foreground = not background. Drop tiny specks of foreground (noise) but keep every real subject.
@@ -76,7 +78,11 @@ function buildMask(img, tolerance) {
   const biggest = Math.max(0, ...sizes), keepMin = Math.max(biggest * 0.06, N * 0.002);
   const mask = new Uint8Array(N); let kept = 0;
   for (let i = 0; i < N; i++) if (!bg[i] && sizes[label[i]] >= keepMin) { mask[i] = 1; kept++; }
-  return { mask, w, h, fraction: kept / N, removedPct: Math.round((1 - kept / N) * 100) };
+  // How much of the centre of the picture got removed: a real subject sits there, so a big loss means the fill leaked into it.
+  const cx0 = Math.floor(w * 0.35), cx1 = Math.ceil(w * 0.65), cy0 = Math.floor(h * 0.35), cy1 = Math.ceil(h * 0.65);
+  let centreKept = 0, centreAll = 0;
+  for (let y = cy0; y < cy1; y++) for (let x = cx0; x < cx1; x++) { centreAll++; if (mask[y * w + x]) centreKept++; }
+  return { mask, w, h, fraction: kept / N, removedPct: Math.round((1 - kept / N) * 100), borderSpread, centreKept: centreAll ? centreKept / centreAll : 1 };
 }
 
 const defaultRun = (cmd, args, timeout) => new Promise((resolve, reject) => execFile(cmd, args, { timeout }, (e, _o, se) => (e ? reject(new Error(String(se || e.message).slice(-300))) : resolve())));
@@ -85,7 +91,9 @@ async function removeBackground({ ffmpeg, run = defaultRun, input, output, maxSi
   const tolerance = LEVELS[level || strength] || LEVELS.medium;
   const full = await decodePpm(ffmpeg, input, maxSide);
   const small = shrink(full, 480);
-  const { mask, w, h, removedPct } = buildMask(small, tolerance);
+  const { mask, w, h, removedPct, borderSpread, centreKept } = buildMask(small, tolerance);
+  const PLAIN_MSG = 'Is photo ka background plain nahi hai (alag-alag rang ya cheezein dikh rahi hain), isliye sahi kaat nahi payega. Plain deewar, kaagaz ya aasmaan ke saamne wali photo try karo. Busy background ke liye free AI Space jodna padega.';
+  if (borderSpread > 60 || centreKept < 0.45) throw new Error(PLAIN_MSG);
   if (removedPct < 3) throw new Error('Background alag nahi ho paya: photo ka background plain (ek rang ka ya smooth) nahi lag raha. Plain deewar ya kaagaz ke saamne wali photo try karo.');
   if (removedPct > 94) throw new Error('Background aur subject ke rang bahut milte hain, isliye sab hat ja raha tha. "High" ki jagah "Low" try karo ya kisi alag rang ke background wali photo lo.');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vidora-bg-'));
