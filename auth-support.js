@@ -37,6 +37,8 @@ function setupAuthSupport(app) {
   const mailer=require('./mailer');
   const baseUrl=()=>process.env.APP_BASE_URL||process.env.RENDER_EXTERNAL_URL||'';
   const newResetToken=async userId=>{const token=crypto.randomBytes(32).toString('base64url'),tokenHash=crypto.createHash('sha256').update(token).digest('hex');await pool.query('DELETE FROM vidora_password_resets WHERE expires_at<NOW() OR used_at IS NOT NULL');await pool.query("INSERT INTO vidora_password_resets(user_id,token_hash,expires_at) VALUES($1,$2,NOW()+INTERVAL '30 minutes')",[userId,tokenHash]);return{token,tokenHash};};
+  require('./share').setupShare(app,pool,{user,admin,origin,track,baseUrl});
+  require('./support').setupSupport(app,{user,origin,track});
   const resetLink=(base,token)=>{const l=new URL('/',base);l.hash='reset='+encodeURIComponent(token);return l.toString();};
   app.get('/api/auth/me',readLimit,(req,res)=>res.set('Cache-Control','no-store').json({user:req.session.account||null}));
   app.post('/api/auth/signup',authLimit,origin,async(req,res,next)=>{try{
@@ -62,7 +64,8 @@ function setupAuthSupport(app) {
   app.post('/api/auth/forgot-password',resetLimit,origin,async(req,res)=>{
     const ready=mailer.isConfigured()&&Boolean(baseUrl());
     const sentMsg='Agar is email se account hai to reset link bhej diya gaya hai (30 minute valid). Inbox ke saath Spam/Promotions folder bhi dekho.';
-    const offMsg='Email service abhi set nahi hai, isliye link email se nahi bhej sakte. Help section me message bhejo ya owner se contact karo — owner aapko reset link dega.';
+    const offMsg='Reset email abhi nahi bhej pa rahe. Thodi der baad dobara try karo, ya Help (?) me apni dikkat likho.';
+    const failMsg='Email bhejne me abhi dikkat aa rahi hai (email service ne mail reject kar di). Thodi der baad try karo ya owner se contact karo.';
     try{
       const email=String(req.body.email||'').trim().toLowerCase();
       if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254||email===String(process.env.ADMIN_EMAIL).trim().toLowerCase())return res.json({ok:true,emailEnabled:ready,message:ready?sentMsg:offMsg});
@@ -81,10 +84,18 @@ function setupAuthSupport(app) {
         await pool.query('DELETE FROM vidora_password_resets WHERE token_hash=$1',[tokenHash]).catch(()=>{});
         console.error('[Vidora] Password reset email failed:',e.message);
         track('reset_request',{userId:uid,status:'failed',detail:e.message});
-        return res.json({ok:true,emailEnabled:false,message:offMsg});
+        return res.json({ok:true,emailEnabled:false,message:failMsg});
       }
       res.json({ok:true,emailEnabled:true,message:sentMsg});
     }catch(e){console.error('[Vidora] Password reset request failed:',e.message);res.json({ok:true,emailEnabled:false,message:offMsg});}
+  });
+  app.post('/api/admin/test-email',user,admin,origin,async(req,res)=>{
+    const missing=[];if(!process.env.BREVO_API_KEY)missing.push('BREVO_API_KEY');if(!process.env.MAIL_FROM)missing.push('MAIL_FROM');
+    if(!mailer.isConfigured())return res.status(400).json({error:'Render Environment me ye variable nahi mile: '+(missing.join(', ')||'RESEND_*')+'. Dono save karke deploy Live hone do.'});
+    if(!baseUrl())return res.status(400).json({error:'Site ka address nahi mila. Render me APP_BASE_URL = https://vidora-ai-kvp3.onrender.com jodo.'});
+    const to=String(process.env.ADMIN_EMAIL).trim().toLowerCase();
+    try{const r=await mailer.sendMail({to,subject:'Vidora AI test email',html:'<p>Ye Vidora AI ka test email hai. Agar ye mil gaya to Forgot password ka email bhi chalega.</p>',text:'Vidora AI test email. Forgot password ka email bhi chalega.'});res.json({ok:true,provider:r.provider,to});}
+    catch(e){res.status(502).json({error:e.message});}
   });
   app.post('/api/admin/users/:id/reset-link',user,admin,origin,async(req,res,next)=>{try{
     if(!/^\d{1,18}$/.test(req.params.id))return res.status(400).json({error:'Invalid user id.'});
@@ -123,6 +134,7 @@ function setupAuthSupport(app) {
     CREATE TABLE IF NOT EXISTS vidora_comments(id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES vidora_users(id) ON DELETE CASCADE,body VARCHAR(2000) NOT NULL,kind VARCHAR(20) NOT NULL DEFAULT 'feedback',status VARCHAR(20) NOT NULL DEFAULT 'received',priority VARCHAR(10) NOT NULL DEFAULT 'normal',ai_reply TEXT NOT NULL,ai_analysis TEXT NOT NULL,admin_note TEXT,is_public BOOLEAN NOT NULL DEFAULT false,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
     CREATE INDEX IF NOT EXISTS vidora_comments_created_idx ON vidora_comments(created_at DESC); CREATE INDEX IF NOT EXISTS vidora_comments_user_idx ON vidora_comments(user_id);
     ${require('./analytics').EVENTS_SCHEMA}
+    ${require('./share').SCHEMA}
     CREATE TABLE IF NOT EXISTS vidora_password_resets(id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL REFERENCES vidora_users(id) ON DELETE CASCADE,token_hash CHAR(64) NOT NULL UNIQUE,expires_at TIMESTAMPTZ NOT NULL,used_at TIMESTAMPTZ,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()); CREATE INDEX IF NOT EXISTS vidora_password_resets_user_idx ON vidora_password_resets(user_id);`)
     .then(async()=>{
       const adminEmail=String(process.env.ADMIN_EMAIL).trim().toLowerCase();
