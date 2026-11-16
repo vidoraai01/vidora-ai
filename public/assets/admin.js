@@ -40,8 +40,8 @@
   async function boot() {
     try {
       const me = await api('/api/auth/me');
-      if (!me.user) return gate('Admin sign-in required', 'Pehle site par jaakar admin email aur password se Sign in karo, phir yahan wapas aao.', 'Go to sign in');
-      if (me.user.role !== 'admin') return gate('Admin only', 'Ye page sirf site ke owner (admin) ke liye hai.', 'Back to site');
+      if (!me.user) return gate('Admin sign-in required', 'First go to the site, sign in with the admin email and password, then come back here.', 'Go to sign in');
+      if (me.user.role !== 'admin') return gate('Admin only', 'This page is only for the site owner (admin).', 'Back to site');
       await load();
     } catch (e) { gate('Could not load', e.message, 'Back to site'); }
   }
@@ -51,7 +51,7 @@
       const d = await api('/api/admin/dashboard?days=' + state.days);
       state.data = d; render();
     } catch (e) {
-      if (e.status === 401 || e.status === 403) return gate('Admin sign-in required', 'Session khatam ho gaya. Site par dobara admin se Sign in karo.', 'Go to sign in');
+      if (e.status === 401 || e.status === 403) return gate('Admin sign-in required', 'Your session has ended. Sign in again as admin on the site.', 'Go to sign in');
       if (!silent) toast(e.message); if (!state.data) gate('Could not load dashboard', e.message, null);
     }
   }
@@ -78,16 +78,16 @@
     const note = h('input', { type: 'text', maxlength: '1000', placeholder: 'Note for the user (optional)', value: r.admin_note || '' });
     const save = h('button', { class: 'primary-btn', type: 'button', text: 'Save', onclick: async () => {
       const st = status.value;
-      if (st === 'fixed' && !confirm('Kya fix deploy ho chuka hai aur tumne verify kar liya hai? Tabhi Fixed chuno.')) return;
+      if (st === 'fixed' && !confirm('Has the fix been deployed and verified? Only then choose Fixed.')) return;
       save.disabled = true;
-      try { await api('/api/admin/issues/' + encodeURIComponent(r.id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: st, adminNote: note.value, verified: st === 'fixed' }) }); toast('Updated. User ko naya status dikhega.'); await load(true); }
+      try { await api('/api/admin/issues/' + encodeURIComponent(r.id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: st, adminNote: note.value, verified: st === 'fixed' }) }); toast('Updated. The user will see the new status.'); await load(true); }
       catch (e) { toast(e.message); save.disabled = false; }
     } });
     return h('article', { class: 'rep ' + r.priority + (r.status === 'fixed' ? ' fixed' : '') },
       h('div', { class: 'rep-top' }, h('span', { class: 'badge ' + r.kind, text: r.kind }), h('span', { class: 'badge ' + r.priority, text: r.priority + ' priority' }), h('span', { class: 'badge ' + r.status, text: r.status.replace('_', ' ') }), h('span', { class: 'who' }, h('b', { text: r.name }), ' · ', r.email, ' · ', when(r.created_at))),
       h('div', { class: 'msg', text: r.body }),
-      h('div', { class: 'diag' }, h('b', { text: 'Dikkat kya hai: ' }), r.likely.cause, h('br'), h('b', { text: 'Kya karein: ' }), r.likely.fix),
-      r.recentFailures.length ? h('div', null, h('div', { class: 'who', text: 'Is user ke recent errors:' }), h('ul', { class: 'fails' }, r.recentFailures.map(f => h('li', null, h('b', { text: f.tool || 'unknown' }), ' · ', when(f.created_at), h('br'), (f.detail || '').slice(0, 220), h('br'), '→ ' + f.cause)))) : h('div', { class: 'who', text: 'Is user ka koi recorded error nahi mila.' }),
+      h('div', { class: 'diag' }, h('b', { text: 'What is wrong: ' }), r.likely.cause, h('br'), h('b', { text: 'What to do: ' }), r.likely.fix),
+      r.recentFailures.length ? h('div', null, h('div', { class: 'who', text: 'Recent errors for this user:' }), h('ul', { class: 'fails' }, r.recentFailures.map(f => h('li', null, h('b', { text: f.tool || 'unknown' }), ' · ', when(f.created_at), h('br'), (f.detail || '').slice(0, 220), h('br'), '→ ' + f.cause)))) : h('div', { class: 'who', text: 'No recorded errors for this user.' }),
       r.ai_analysis ? h('div', { class: 'who', text: r.ai_analysis }) : null,
       h('div', { class: 'rep-actions' }, status, note, save));
   }
@@ -97,19 +97,19 @@
     let list = d.reports;
     if (f === 'open') list = list.filter(r => r.status !== 'fixed'); else if (f === 'bug') list = list.filter(r => r.kind === 'bug' && r.status !== 'fixed'); else if (f === 'high') list = list.filter(r => r.priority === 'high' && r.status !== 'fixed'); else if (f === 'fixed') list = list.filter(r => r.status === 'fixed');
     const chips = [['open', 'Open (' + d.kpi.openReports + ')'], ['high', 'High (' + d.kpi.openHigh + ')'], ['bug', 'Bugs (' + d.kpi.openBugs + ')'], ['fixed', 'Fixed'], ['all', 'All']].map(([v, t]) => h('button', { class: 'adm-chip' + (f === v ? ' on' : ''), type: 'button', text: t, onclick: () => { state.filter = v; render(); } }));
-    return h('section', { class: 'adm-card' }, h('h2', { text: 'Help messages & reports' }), h('p', { class: 'hint', text: 'User ne jo likha, uski dikkat ki wajah aur uske recent errors ek jagah. Status badalte hi user ko dikh jata hai.' }), h('div', { class: 'adm-range' }, chips), list.length ? list.map(reportCard) : h('div', { class: 'empty', text: 'Is filter me koi report nahi.' }));
+    return h('section', { class: 'adm-card' }, h('h2', { text: 'Help messages & reports' }), h('p', { class: 'hint', text: 'What the user wrote, the likely cause and their recent errors in one place. The user sees any status change right away.' }), h('div', { class: 'adm-range' }, chips), list.length ? list.map(reportCard) : h('div', { class: 'empty', text: 'No reports in this filter.' }));
   }
 
   function errorsSection(d) {
-    if (!d.errors.length) return h('section', { class: 'adm-card' }, h('h2', { text: 'Top errors' }), h('div', { class: 'empty', text: 'Is period me koi error nahi. 🎉' }));
-    return h('section', { class: 'adm-card' }, h('h2', { text: 'Top errors' }), h('p', { class: 'hint', text: 'Sabse zyada baar kaun si dikkat aayi, uski wajah aur ilaaj.' }),
-      h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Times', 'Error', 'Wajah / Ilaaj', 'Users'].map(t => h('th', { text: t })))),
+    if (!d.errors.length) return h('section', { class: 'adm-card' }, h('h2', { text: 'Top errors' }), h('div', { class: 'empty', text: 'No errors in this period. 🎉' }));
+    return h('section', { class: 'adm-card' }, h('h2', { text: 'Top errors' }), h('p', { class: 'hint', text: 'Which problems happened most often, with the cause and fix.' }),
+      h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Times', 'Error', 'Cause / Fix', 'Users'].map(t => h('th', { text: t })))),
         h('tbody', null, d.errors.map(e => h('tr', null, h('td', { class: 'num', text: e.count + '×' }), h('td', null, e.message, h('br'), h('span', { class: 'muted', text: (e.tools || []).join(', ') + ' · ' + ago(e.lastAt) })), h('td', null, e.cause, h('br'), h('span', { class: 'muted', text: e.fix })), h('td', { class: 'num', text: e.users })))))));
   }
 
   function toolsSection(d) {
-    if (!d.tools.length) return h('section', { class: 'adm-card' }, h('h2', { text: 'Tools usage' }), h('div', { class: 'empty', text: 'Abhi tak koi tool use nahi hua.' }));
-    return h('section', { class: 'adm-card' }, h('h2', { text: 'Tools usage' }), h('p', { class: 'hint', text: 'Kaun sa tool kitna chala aur kitna safal raha.' }),
+    if (!d.tools.length) return h('section', { class: 'adm-card' }, h('h2', { text: 'Tools usage' }), h('div', { class: 'empty', text: 'No tool has been used yet.' }));
+    return h('section', { class: 'adm-card' }, h('h2', { text: 'Tools usage' }), h('p', { class: 'hint', text: 'How often each tool ran and how often it succeeded.' }),
       h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Tool', 'Runs', 'OK', 'Failed', 'Success', 'Avg time'].map((t, i) => h('th', { class: i ? 'num' : '', text: t })))),
         h('tbody', null, d.tools.map(t => { const rate = t.runs ? Math.round(t.ok / t.runs * 100) : 0; return h('tr', null, h('td', { text: t.tool }), h('td', { class: 'num', text: t.runs }), h('td', { class: 'num pill-ok', text: t.ok }), h('td', { class: 'num ' + (t.failed ? 'pill-bad' : ''), text: t.failed }), h('td', { class: 'num', text: rate + '%' }), h('td', { class: 'num', text: dur(t.avgMs) })); })))));
   }
@@ -117,13 +117,13 @@
   function userRow(u) {
     const body = h('div', { class: 'uact' }, h('div', { class: 'empty', text: 'Loading activity…' }));
     const row = h('div', { class: 'urow' });
-    const extra = h('div', null, body, h('button', { class: 'outline-btn', type: 'button', text: 'Password reset link banao', onclick: () => makeLink(u) }));
+    const extra = h('div', null, body, h('button', { class: 'outline-btn', type: 'button', text: 'Create password reset link', onclick: () => makeLink(u) }));
     const head = h('button', { class: 'uhead', type: 'button', 'aria-expanded': 'false', onclick: async () => {
       const open = row.classList.toggle('open'); head.setAttribute('aria-expanded', String(open));
       if (!open) { extra.remove(); return; } row.append(extra);
       try {
         const { events } = await api('/api/admin/users/' + encodeURIComponent(u.id) + '/activity');
-        body.replaceChildren(events.length ? h('ul', { class: 'fails' }, events.map(e => h('li', null, h('b', { text: e.kind + (e.tool ? ' · ' + e.tool : '') }), ' · ', h('span', { class: e.status === 'failed' ? 'pill-bad' : e.status === 'ok' ? 'pill-ok' : '', text: e.status || '' }), ' · ', when(e.created_at), e.bytes ? ' · ' + bytes(e.bytes) : '', e.ms ? ' · ' + dur(e.ms) : '', e.detail ? h('br') : null, e.detail ? e.detail.slice(0, 200) : null, e.cause ? h('br') : null, e.cause ? '→ ' + e.cause : null))) : h('div', { class: 'empty', text: 'Is user ki koi activity record nahi hui.' }));
+        body.replaceChildren(events.length ? h('ul', { class: 'fails' }, events.map(e => h('li', null, h('b', { text: e.kind + (e.tool ? ' · ' + e.tool : '') }), ' · ', h('span', { class: e.status === 'failed' ? 'pill-bad' : e.status === 'ok' ? 'pill-ok' : '', text: e.status || '' }), ' · ', when(e.created_at), e.bytes ? ' · ' + bytes(e.bytes) : '', e.ms ? ' · ' + dur(e.ms) : '', e.detail ? h('br') : null, e.detail ? e.detail.slice(0, 200) : null, e.cause ? h('br') : null, e.cause ? '→ ' + e.cause : null))) : h('div', { class: 'empty', text: 'No activity recorded for this user.' }));
       } catch (e) { body.replaceChildren(h('div', { class: 'empty', text: e.message })); }
     } },
       h('div', null, h('div', { class: 'uname', text: u.name }), h('div', { class: 'umail', text: u.email })),
@@ -135,9 +135,9 @@
     const q = state.search.trim().toLowerCase();
     const list = q ? d.users.filter(u => (u.name + ' ' + u.email).toLowerCase().includes(q)) : d.users;
     const input = h('input', { class: 'adm-search', type: 'search', placeholder: 'Search name or email…', value: state.search, 'aria-label': 'Search users' });
-    const holder = h('div', null, list.length ? list.map(userRow) : h('div', { class: 'empty', text: 'Koi user nahi mila.' }));
-    input.addEventListener('input', () => { state.search = input.value; const ql = input.value.trim().toLowerCase(); const l2 = ql ? d.users.filter(u => (u.name + ' ' + u.email).toLowerCase().includes(ql)) : d.users; holder.replaceChildren(...(l2.length ? l2.map(userRow) : [h('div', { class: 'empty', text: 'Koi user nahi mila.' })])); });
-    return h('section', { class: 'adm-card' }, h('h2', { text: 'Users (' + d.kpi.totalUsers + ')' }), h('p', { class: 'hint', text: 'Latest activity wale pehle. Kisi user par tap karo to uski recent activity aur errors dikhenge.' }), input, holder);
+    const holder = h('div', null, list.length ? list.map(userRow) : h('div', { class: 'empty', text: 'No users found.' }));
+    input.addEventListener('input', () => { state.search = input.value; const ql = input.value.trim().toLowerCase(); const l2 = ql ? d.users.filter(u => (u.name + ' ' + u.email).toLowerCase().includes(ql)) : d.users; holder.replaceChildren(...(l2.length ? l2.map(userRow) : [h('div', { class: 'empty', text: 'No users found.' })])); });
+    return h('section', { class: 'adm-card' }, h('h2', { text: 'Users (' + d.kpi.totalUsers + ')' }), h('p', { class: 'hint', text: 'Most recently active first. Tap a user to see their recent activity and errors.' }), input, holder);
   }
 
   function systemSection(d) {
@@ -146,13 +146,13 @@
     const cells = [['Uptime', uptime(s.uptimeSeconds)], ['Memory used', s.rssMB + ' MB' + (s.memoryLimitMB ? ' / ' + s.memoryLimitMB + ' MB' : '')], ['Active jobs now', String(s.activeJobs)], ['Files waiting', String(s.heldUploads)], ['Low-resource mode', s.lowResource ? 'ON' : 'off'], ['Max video length', s.maxVideoSeconds + ' s'],
       ['Visual Change', s.providers.visualChange], ['Photo AI (Space)', yn(s.providers.photoAI)], ['Video Enhance AI', yn(s.providers.videoEnhanceAI)], ['Gemini', yn(s.providers.gemini)], ['Reset e-mail', yn(s.providers.resetEmail)], ['Node', s.node]];
     const result = h('p', { class: 'hint', text: state.mailTest || '' });
-    const btn = h('button', { class: 'outline-btn', type: 'button', text: '✉ Test email bhejo (apne admin email par)', onclick: async () => {
-      btn.disabled = true; result.textContent = 'Bhej raha hoon…';
-      try { const r = await api('/api/admin/test-email', { method: 'POST' }); state.mailTest = '✓ Email chala gaya (' + r.provider + ') → ' + r.to + '. Inbox/Spam dekho.'; }
+    const btn = h('button', { class: 'outline-btn', type: 'button', text: '✉ Send test email (to your admin email)', onclick: async () => {
+      btn.disabled = true; result.textContent = 'Sending…';
+      try { const r = await api('/api/admin/test-email', { method: 'POST' }); state.mailTest = '✓ Email sent (' + r.provider + ') → ' + r.to + '. Check Inbox/Spam.'; }
       catch (e) { state.mailTest = '✗ ' + e.message; }
       result.textContent = state.mailTest; btn.disabled = false;
     } });
-    return h('section', { class: 'adm-card' }, h('h2', { text: 'Server health' }), h('p', { class: 'hint', text: 'Memory limit ke kareeb ho to Render crash/502 deta hai.' }), h('div', { class: 'sys' }, cells.map(([a, b]) => h('div', null, a, h('b', { text: b })))), btn, result);
+    return h('section', { class: 'adm-card' }, h('h2', { text: 'Server health' }), h('p', { class: 'hint', text: 'Render crashes or returns 502 when memory is near the limit.' }), h('div', { class: 'sys' }, cells.map(([a, b]) => h('div', null, a, h('b', { text: b })))), btn, result);
   }
 
   const PROV = { gmail: 'Gmail', outlook: 'Outlook / Hotmail', yahoo: 'Yahoo', icloud: 'iCloud', other: 'Other email' };
@@ -160,17 +160,17 @@
     const l = d.lifetime, guests = l.guestVisits;
     const tot = Math.max(1, l.users);
     const rows = d.providers.map(p => h('tr', null, h('td', { text: PROV[p.provider] || p.provider }), h('td', { class: 'num', text: num(p.users) }), h('td', { class: 'num', text: num(p.signedIn) }), h('td', { class: 'num', text: num(p.signIns) }), h('td', { class: 'num', text: Math.round(p.users / tot * 100) + '%' })));
-    if (guests) rows.push(h('tr', null, h('td', { text: 'Guest (bina login)' }), h('td', { class: 'num', text: '—' }), h('td', { class: 'num', text: '—' }), h('td', { class: 'num', text: num(guests) + ' visits' }), h('td', { class: 'num', text: '' })));
-    return h('section', { class: 'adm-card' }, h('h2', { text: 'Lifetime (hamesha ke liye)' }), h('p', { class: 'hint', text: 'Ye ginti kabhi delete nahi hoti, chahe purani activity saaf ho jaye.' }),
+    if (guests) rows.push(h('tr', null, h('td', { text: 'Guest (no login)' }), h('td', { class: 'num', text: '—' }), h('td', { class: 'num', text: '—' }), h('td', { class: 'num', text: num(guests) + ' visits' }), h('td', { class: 'num', text: '' })));
+    return h('section', { class: 'adm-card' }, h('h2', { text: 'Lifetime (kept forever)' }), h('p', { class: 'hint', text: 'These counts are never deleted, even when old activity is cleaned up.' }),
       h('div', { class: 'kpis' },
         kpi('Total users', num(l.users), l.firstUserAt ? 'pehla user ' + when(l.firstUserAt) : ''),
-        kpi('Kitno ne login kiya', num(l.everSignedIn), 'kam se kam ek baar'),
-        kpi('Total sign-ins', num(l.signIns), 'abhi tak ke saare'),
-        kpi('Guest visits', num(guests), 'bina login ke aaye'),
+        kpi('Ever signed in', num(l.everSignedIn), 'at least once'),
+        kpi('Total sign-ins', num(l.signIns), 'all time'),
+        kpi('Guest visits', num(guests), 'visited without signing in'),
         kpi('Total uploads', num(l.uploads), bytes(l.uploadBytes)),
         kpi('Tool runs', num(l.runsOk + l.runsFailed), num(l.runsOk) + ' safal · ' + num(l.runsFailed) + ' fail')),
       h('h3', { text: 'Kis email se aaye' }),
-      h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Provider', 'Users', 'Login kiya', 'Sign-ins', 'Share'].map((t, i) => h('th', { class: i ? 'num' : '', text: t })))), h('tbody', null, rows))));
+      h('div', { class: 'scroll-x' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Provider', 'Users', 'Signed in', 'Sign-ins', 'Share'].map((t, i) => h('th', { class: i ? 'num' : '', text: t })))), h('tbody', null, rows))));
   }
 
   // The freshly made link is kept in state so a refresh/re-render never wipes it before you copy it.
@@ -186,17 +186,17 @@
     const g = state.generated; if (!g) return null;
     const inp = h('input', { type: 'text', readonly: true, value: g.link, 'aria-label': 'Reset link' });
     return h('section', { class: 'adm-card' }, h('h2', { text: 'Reset link ready' }),
-      h('p', { class: 'hint', text: g.email + ' ke liye link (' + g.minutes + ' min valid, sirf ek baar chalega). Copy karke WhatsApp par bhejo:' }), inp,
+      h('p', { class: 'hint', text: g.email + ' — link (' + g.minutes + ' min valid, works once only). Copy it and send it via WhatsApp:' }), inp,
       h('div', { class: 'rep-actions' },
-        h('button', { class: 'primary-btn', type: 'button', text: 'Copy link', onclick: async () => { try { await navigator.clipboard.writeText(g.link); toast('Link copy ho gaya.'); } catch { inp.focus(); inp.select(); toast('Link select kiya, ab copy karo.'); } } }),
+        h('button', { class: 'primary-btn', type: 'button', text: 'Copy link', onclick: async () => { try { await navigator.clipboard.writeText(g.link); toast('Link copied.'); } catch { inp.focus(); inp.select(); toast('Link selected, now copy it.'); } } }),
         h('button', { class: 'outline-btn', type: 'button', text: 'Close', onclick: () => { state.generated = null; load(true); } })));
   }
 
   function resetSection(d) {
     if (!d.resetRequests.length) return null;
     return h('section', { class: 'adm-card' }, h('h2', { text: 'Password reset requests (' + d.resetRequests.length + ')' }),
-      h('p', { class: 'hint', text: 'In users ne "Forgot password" dabaya par email nahi ja saki. Link banao aur unhe WhatsApp/DM se bhejo.' }),
-      d.resetRequests.map(r => { return h('div', { class: 'urow open' }, h('div', { class: 'uhead' }, h('div', null, h('div', { class: 'uname', text: r.name }), h('div', { class: 'umail', text: r.email }), h('div', { class: 'umail', text: when(r.at) + ' · ' + (r.detail || r.status) })), h('button', { class: 'primary-btn', type: 'button', text: 'Reset link banao', onclick: () => makeLink({ id: r.userId }) }))); }));
+      h('p', { class: 'hint', text: 'These users pressed "Forgot password" but the email could not be sent. Create a link and send it to them by WhatsApp/DM.' }),
+      d.resetRequests.map(r => { return h('div', { class: 'urow open' }, h('div', { class: 'uhead' }, h('div', null, h('div', { class: 'uname', text: r.name }), h('div', { class: 'umail', text: r.email }), h('div', { class: 'umail', text: when(r.at) + ' · ' + (r.detail || r.status) })), h('button', { class: 'primary-btn', type: 'button', text: 'Create reset link', onclick: () => makeLink({ id: r.userId }) }))); }));
   }
 
   function render() {
@@ -210,14 +210,14 @@
       h('div', { class: 'adm-meta' }, h('button', { class: 'outline-btn', type: 'button', text: '↻ Refresh', onclick: () => load() }), h('label', null, auto, 'Auto-refresh 60s'), h('span', { text: 'Updated ' + when(d.generatedAt) + ' IST' })),
       h('div', { class: 'kpis' },
         kpi('Total users', num(k.totalUsers), '+' + num(k.newUsers) + ' new (' + num(k.newUsers24h) + ' in 24h)'),
-        kpi('Active users', num(k.activeUsers), 'jinhone kuch kiya'),
+        kpi('Active users', num(k.activeUsers), 'did something'),
         kpi('Sign-ins', num(k.signIns), num(k.signInUsers) + ' different people'),
-        kpi('Failed sign-ins', num(k.failedSignIns), 'galat password/email', k.failedSignIns > 10 ? 'warn' : ''),
+        kpi('Failed sign-ins', num(k.failedSignIns), 'wrong password/email', k.failedSignIns > 10 ? 'warn' : ''),
         kpi('Uploads', num(k.uploads), bytes(k.uploadBytes) + ' total'),
-        kpi('Tool runs', num(k.runs), k.successRate === null ? 'abhi koi run nahi' : k.successRate + '% successful', k.successRate !== null && k.successRate < 70 ? 'warn' : 'good'),
+        kpi('Tool runs', num(k.runs), k.successRate === null ? 'no runs yet' : k.successRate + '% successful', k.successRate !== null && k.successRate < 70 ? 'warn' : 'good'),
         kpi('Failures', num(fails), num(k.runsFailed) + ' tool + ' + num(k.uploadFailures) + ' upload', fails ? 'bad' : 'good'),
         kpi('Open reports', num(k.openReports), num(k.openHigh) + ' high priority', k.openHigh ? 'bad' : k.openReports ? 'warn' : 'good')),
-      h('section', { class: 'adm-card' }, h('h2', { text: 'Activity' }), h('p', { class: 'hint', text: 'Bar par tap/hover karo to us din ke numbers dikhenge.' }), chart(d.series, d.unit)),
+      h('section', { class: 'adm-card' }, h('h2', { text: 'Activity' }), h('p', { class: 'hint', text: 'Tap or hover a bar to see the numbers for that day.' }), chart(d.series, d.unit)),
       lifetimeSection(d), generatedSection(), resetSection(d), reportsSection(d), errorsSection(d), toolsSection(d), usersSection(d), systemSection(d)];
     app.replaceChildren(...parts.filter(Boolean));
     window.scrollTo(0, keep);
