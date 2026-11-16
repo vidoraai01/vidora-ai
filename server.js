@@ -599,13 +599,29 @@ app.post('/api/photo-cartoon', requireSession, trackFinish('photo-cartoon','job'
   try{
     await validateMedia(source,'photo',0);
     let mode='cartoon-gemini';
+    const cartoonPrefix=style==='3d'&&gradioConfigured('CARTOON3D')?'CARTOON3D':gradioConfigured('CARTOON')?'CARTOON':null;
+    let done=false;
+    if(cartoonPrefix){
+      // 1st choice: free Hugging Face Space (e.g. AnimeGANv2). Any failure falls through to Gemini, then FFmpeg.
+      const prepared=path.join(OUT_DIR,`${crypto.randomUUID()}.ct-in.png`),raw=path.join(OUT_DIR,`${crypto.randomUUID()}.ct-out.bin`);
+      try{
+        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',source.path,'-frames:v','1','-vf','scale=min(1024\\,iw):min(1024\\,ih):force_original_aspect_ratio=decrease:flags=lanczos,format=rgb24',prepared],60000);
+        await transformWithGradio({prefix:cartoonPrefix,inputPath:prepared,outputPath:raw,mime:'image/png',maxWaitMs:Math.max(30000,Number(process.env.CARTOON_MAX_WAIT_MS)||90000),label:'free cartoon AI server'});
+        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1','-vf','format=rgb24',output],60000);
+        mode='cartoon-space';done=true;
+      }catch(e){console.warn('[Vidora Cartoon] Free Space failed:',e.message);safeDelete(output);}
+      finally{safeDelete(prepared);safeDelete(raw);}
+    }
     try{
+      if(done)throw null;
       if(!geminiImageOn())throw new Error('GEMINI_API_KEY is not set.');
       await geminiPhotoJob({source,output,kind:style==='3d'?'cartoon3d':'cartoon2d'});
     }catch(e){
+      if(e===null){/* Space result is already in output */}else{
       console.warn('[Vidora Cartoon] Gemini failed; using FFmpeg cartoon look:',e.message);safeDelete(output);mode='cartoon-local';
       const look=lookFilters(style==='3d'?'look-cartoon3d':'look-cartoon2d');
       await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',source.path,'-frames:v','1','-vf',['scale=min(1600\\,iw):min(1600\\,ih):force_original_aspect_ratio=decrease:flags=lanczos','format=rgb24',...look].join(','),output],120000);
+    }
     }
     res.setHeader('X-Vidora-AI-Mode',mode);res.setHeader('X-Vidora-AI-Confidence','1');
     res.download(output,`vidora-cartoon-${style}.png`,()=>safeDelete(output));
