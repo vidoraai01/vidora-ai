@@ -92,10 +92,10 @@ async function removeBackground({ ffmpeg, run = defaultRun, input, output, maxSi
   const full = await decodePpm(ffmpeg, input, maxSide);
   const small = shrink(full, 480);
   const { mask, w, h, removedPct, borderSpread, centreKept } = buildMask(small, tolerance);
-  const PLAIN_MSG = 'Is photo ka background plain nahi hai (alag-alag rang ya cheezein dikh rahi hain), isliye sahi kaat nahi payega. Plain deewar, kaagaz ya aasmaan ke saamne wali photo try karo. Busy background ke liye free AI Space jodna padega.';
+  const PLAIN_MSG = 'The background of this photo is not plain (it has several colours or objects), so it cannot be cut out cleanly. Try a photo taken in front of a plain wall, paper or sky. Busy backgrounds need a free AI Space connected by the site owner.';
   if (borderSpread > 60 || centreKept < 0.45) throw new Error(PLAIN_MSG);
-  if (removedPct < 3) throw new Error('Background alag nahi ho paya: photo ka background plain (ek rang ka ya smooth) nahi lag raha. Plain deewar ya kaagaz ke saamne wali photo try karo.');
-  if (removedPct > 94) throw new Error('Background aur subject ke rang bahut milte hain, isliye sab hat ja raha tha. "High" ki jagah "Low" try karo ya kisi alag rang ke background wali photo lo.');
+  if (removedPct < 3) throw new Error('The background could not be separated: it does not look plain (one colour or smooth). Try a photo taken in front of a plain wall or paper.');
+  if (removedPct > 94) throw new Error('The subject and background colours are too similar, so almost everything was removed. Try "Less" strength, or use a photo with a background of a different colour.');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vidora-bg-'));
   try {
     const pgm = path.join(dir, 'mask.pgm');

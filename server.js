@@ -631,6 +631,8 @@ app.post('/api/photo-bgremove', requireSession, trackFinish('photo-bgremove','jo
   let source=req.file,storedId=null;if(!source&&req.body.uploadId){const stored=ownedUpload(req,req.body.uploadId,'photo');if(!stored)return res.status(404).json({error:'Uploaded photo not found or expired.'});source=stored.file;storedId=stored.record.id;}
   if(!source)return res.status(400).json({error:'Choose one photo first.'});
   const output=path.join(OUT_DIR,`${crypto.randomUUID()}.png`);
+  const greenFill=String(req.body.bgFill||'green')!=='transparent';
+  const fillGreen=async()=>{if(!greenFill)return;const g=output+'.g.png';await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',output,'-frames:v','1','-filter_complex','color=c=0x00B140:s=2x2[b];[b][0:v]scale2ref[bg][fg];[bg][fg]overlay=format=auto,format=rgb24',g],60000);fs.renameSync(g,output);};
   try{
     await validateMedia(source,'photo',0);
     if(gradioConfigured('BGRM')){
@@ -640,6 +642,7 @@ app.post('/api/photo-bgremove', requireSession, trackFinish('photo-bgremove','jo
         await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',source.path,'-frames:v','1','-vf','scale=min(1536\\,iw):min(1536\\,ih):force_original_aspect_ratio=decrease:flags=lanczos,format=rgb24',prepared],60000);
         await transformWithGradio({prefix:'BGRM',inputPath:prepared,outputPath:raw,mime:'image/png',maxWaitMs:Math.max(30000,Number(process.env.BGRM_MAX_WAIT_MS)||90000),label:'free background AI server'});
         await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1','-vf','format=rgba',output],60000);
+        await fillGreen();
         res.setHeader('X-Vidora-AI-Mode','bg-ai-space');res.setHeader('X-Vidora-AI-Confidence','1');
         return res.download(output,'vidora-background-removed.png',()=>safeDelete(output));
       }catch(e){console.warn('[Vidora BG] AI Space failed; using local method:',e.message);safeDelete(output);}
@@ -647,6 +650,7 @@ app.post('/api/photo-bgremove', requireSession, trackFinish('photo-bgremove','jo
     }
     const maxSide=Number(process.env.BGREMOVE_MAX_SIDE)||(LOW_RESOURCE?1600:2048);
     await removePhotoBackground({ffmpeg:FFMPEG,input:source.path,output,maxSide,tolerance:String(req.body.bgStrength||'medium')});
+    await fillGreen();
     res.setHeader('X-Vidora-AI-Mode','bg-local');res.setHeader('X-Vidora-AI-Confidence','1');
     res.download(output,'vidora-background-removed.png',()=>safeDelete(output));
   }catch(e){safeDelete(output);res.status(400).json({error:e.message||'Background removal failed.'});}
