@@ -54,12 +54,13 @@ async function uploadFile(base, filePath, mime) {
 
 // Collect every downloadable file URL in the result, in order.
 function collectUrls(value, base, out = []) {
-  if (typeof value === 'string') { if (/^https?:\/\//i.test(value)) out.push(value); return out; }
+  if (typeof value === 'string') { if (/^https?:\/\//i.test(value) || /^data:(image|video)\/[\w.+-]+;base64,/i.test(value)) out.push(value); return out; }
   if (Array.isArray(value)) { value.forEach(item => collectUrls(item, base, out)); return out; }
   if (value && typeof value === 'object') {
     if (typeof value.url === 'string' && value.url) { out.push(/^https?:\/\//i.test(value.url) ? value.url : new URL(value.url, base + '/').toString()); return out; }
     if (typeof value.path === 'string' && value.path) { out.push(`${base}/gradio_api/file=${value.path}`); return out; }
     for (const key of ['video', 'image', 'value', 'data', 'output']) if (value[key]) collectUrls(value[key], base, out);
+    if (!out.length) for (const v of Object.values(value)) collectUrls(v, base, out); // unknown dict layout: search every field
   }
   return out;
 }
@@ -128,10 +129,17 @@ async function transformWithGradio({ prefix = 'HF', inputPath, outputPath, promp
   } finally { clearInterval(ticker); }
 
   const outputUrl = findVideoUrl(result, base, outputIndex);
-  if (!outputUrl) throw new Error('The free AI server finished but returned no downloadable file.');
+  if (!outputUrl) throw new Error('The free AI server finished but returned no downloadable file. Reply was: ' + JSON.stringify(result).replace(/[A-Za-z0-9+\/=]{80,}/g, '<long-data>').slice(0, 300));
   if (isCancelled()) throw new Error('The request was cancelled.');
 
   onProgress(88, 'Downloading the result');
+  const inline = /^data:(?:image|video)\/[\w.+-]+;base64,(.+)$/is.exec(outputUrl);
+  if (inline) {
+    const buf = Buffer.from(inline[1], 'base64');
+    if (!buf.length || buf.length > MAX_OUTPUT_BYTES) throw new Error('The free AI server returned an unusable inline file.');
+    fs.writeFileSync(outputPath, buf, { flag: 'wx', mode: 0o600 });
+    return { provider: 'Free open-source model (Gradio/Hugging Face)', outputBytes: buf.length, model: apiName };
+  }
   const response = await request(outputUrl, {}, 120000);
   if (!response.ok || !response.body) throw new Error(`Could not download the result (${response.status}).`);
   let total = 0;
