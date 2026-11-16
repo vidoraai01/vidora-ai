@@ -36,20 +36,20 @@ const NOT_ADMIN = '(e.user_id IS NULL OR e.user_id <> COALESCE($2::bigint,-1))';
 function explainError(message) {
   const m = String(message || '');
   const rules = [
-    [/already have a media job/i, 'User ne ek job chalte hue dusri job shuru kar di.', 'Kuch karne ki zaroorat nahi. User ko pehla job khatam ya cancel karne ko bolo.'],
-    [/cancel/i, 'User ne khud job cancel kiya.', 'Koi dikkat nahi.'],
-    [/not configured|SPACE_URL|API_SECRET|needs .*_SPACE_URL/i, 'Is feature ka AI model/setting Render me jura nahi hai.', 'Render Environment me HF_*/PHOTO_*/VENH_* variables jodo, ya user ko "Instant look" use karne ko bolo.'],
-    [/free (ai|photo|video)[^.]* (server|space)|gpu quota|space|rejected the (file|request)|no downloadable file|event id/i, 'Free Hugging Face Space busy, band ya quota khatam hai.', 'Thodi der baad dobara try karo. App apne aap built-in look/enhance par aa jati hai. Space "Running" hai ya nahi check karo.'],
-    [/failed to fetch|502|503|504|econnreset|socket hang up|network|server is busy/i, 'Server restart hua ya memory (RAM) khatam hui, ya connection toota.', 'Render Logs me "Out of memory" dekho. Chhoti file/kam duration try karo, MAX_VIDEO_SECONDS kam rakho, ya bada server lo.'],
-    [/longer than|too long|duration|5 minutes|30 minutes|exceeds the/i, 'File ki length limit se zyada hai.', 'User ko chhota clip upload karne ko bolo (video 5 min, audio 30 min).'],
-    [/larger than|too large|413|25 MB|250 MB|50 MB|file size/i, 'File ka size limit se bada hai.', 'User ko chhoti file bhejne ko bolo (photo 25 MB, video 250 MB, audio 50 MB).'],
-    [/valid (video|audio|image|photo|media)|stream|codec|corrupt|invalid data|moov|unsupported|only (mp4|jpg)/i, 'File kharab ya unsupported format ki hai.', 'User ko MP4/JPG/PNG/MP3 jaisi standard file dobara export karke bhejne ko bolo.'],
-    [/too many|rate limit|429/i, 'User ne bahut jaldi-jaldi requests bheji.', 'Normal hai. Kuch minute baad chalega.'],
-    [/database|connection terminated|ECONNREFUSED/i, 'Database connection ki dikkat.', 'Neon database chal raha hai ya nahi dekho aur DATABASE_URL check karo.'],
-    [/ffmpeg|filter|invalid argument|error while|conversion failed/i, 'FFmpeg processing me error aaya (filter ya file ki dikkat).', 'Render Logs me ffmpeg ki poori error line dekho aur wo line mujhe bhejo.']
+    [/already have a media job/i, 'The user started a second job while one was already running.', 'Nothing to fix. Ask the user to finish or cancel the first job.'],
+    [/cancel/i, 'The user cancelled the job.', 'No problem.'],
+    [/not configured|SPACE_URL|API_SECRET|needs .*_SPACE_URL/i, 'The AI model for this feature is not set up in Render.', 'Add the HF_*/PHOTO_*/VENH_* variables in Render Environment, or ask the user to use an "Instant look".'],
+    [/free (ai|photo|video)[^.]* (server|space)|gpu quota|space|rejected the (file|request)|no downloadable file|event id/i, 'The free Hugging Face Space is busy, stopped or out of quota.', 'Try again later. The app falls back to the built-in look/enhance automatically. Check that the Space is "Running".'],
+    [/failed to fetch|502|503|504|econnreset|socket hang up|network|server is busy/i, 'The server restarted, ran out of memory (RAM), or the connection dropped.', 'Look for "Out of memory" in the Render Logs. Try a smaller file or shorter duration, lower MAX_VIDEO_SECONDS, or use a bigger server.'],
+    [/longer than|too long|duration|5 minutes|30 minutes|exceeds the/i, 'The file is longer than the limit.', 'Ask the user to upload a shorter clip (video 5 min, audio 30 min).'],
+    [/larger than|too large|413|25 MB|250 MB|50 MB|file size/i, 'The file is larger than the size limit.', 'Ask the user to send a smaller file (photo 25 MB, video 250 MB, audio 50 MB).'],
+    [/valid (video|audio|image|photo|media)|stream|codec|corrupt|invalid data|moov|unsupported|only (mp4|jpg)/i, 'The file is damaged or in an unsupported format.', 'Ask the user to re-export it as a standard MP4/JPG/PNG/MP3 file and upload again.'],
+    [/too many|rate limit|429/i, 'The user sent too many requests too quickly.', 'Normal. It will work again after a few minutes.'],
+    [/database|connection terminated|ECONNREFUSED/i, 'Database connection problem.', 'Check that the Neon database is running and verify DATABASE_URL.'],
+    [/ffmpeg|filter|invalid argument|error while|conversion failed/i, 'FFmpeg failed while processing (a filter or file problem).', 'Open the Render Logs, find the full ffmpeg error line and send it to the developer.']
   ];
   for (const [re, cause, fix] of rules) if (re.test(m)) return { cause, fix };
-  return { cause: 'Wajah pakki nahi hai.', fix: 'Render Logs me is samay ke aas-paas ki error line dekho aur mujhe bhejo.' };
+  return { cause: 'The cause is not certain.', fix: 'Open the Render Logs, find the error lines around this time and send them to the developer.' };
 }
 
 function makeTrack(pool) {

@@ -63,9 +63,9 @@ function setupAuthSupport(app) {
   }catch(e){next(e);}});
   app.post('/api/auth/forgot-password',resetLimit,origin,async(req,res)=>{
     const ready=mailer.isConfigured()&&Boolean(baseUrl());
-    const sentMsg='Agar is email se account hai to reset link bhej diya gaya hai (30 minute valid). Inbox ke saath Spam/Promotions folder bhi dekho.';
-    const offMsg='Reset email abhi nahi bhej pa rahe. Thodi der baad dobara try karo, ya Help (?) me apni dikkat likho.';
-    const failMsg='Email bhejne me abhi dikkat aa rahi hai (email service ne mail reject kar di). Thodi der baad try karo ya owner se contact karo.';
+    const sentMsg='If an account exists for this email, a reset link has been sent (valid for 30 minutes). Please check your Spam and Promotions folders too.';
+    const offMsg='We cannot send the reset email right now. Please try again later, or describe the problem in Help (?).';
+    const failMsg='The reset email could not be sent (the email service rejected it). Please try again later or contact support.';
     try{
       const email=String(req.body.email||'').trim().toLowerCase();
       if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254||email===String(process.env.ADMIN_EMAIL).trim().toLowerCase())return res.json({ok:true,emailEnabled:ready,message:ready?sentMsg:offMsg});
@@ -78,7 +78,7 @@ function setupAuthSupport(app) {
       const {token,tokenHash}=await newResetToken(uid);
       const link=resetLink(base,token);
       try{
-        await mailer.sendMail({to:email,subject:'Vidora AI password reset',html:`<p>Aapke Vidora AI account ka password reset karne ki request aayi hai.</p><p><a href="${link}">Password reset karo</a></p><p>Ye link 30 minute me expire ho jayega. Agar aapne request nahi ki to is email ko ignore karo.</p>`,text:`Reset your Vidora AI password (valid 30 minutes): ${link}`});
+        await mailer.sendMail({to:email,subject:'Vidora AI password reset',html:`<p>We received a request to reset the password of your Vidora AI account.</p><p><a href="${link}">Reset your password</a></p><p>This link expires in 30 minutes. If you did not request it, you can ignore this email.</p>`,text:`Reset your Vidora AI password (valid 30 minutes): ${link}`});
         track('reset_request',{userId:uid,status:'ok',detail:'email sent'});
       }catch(e){
         await pool.query('DELETE FROM vidora_password_resets WHERE token_hash=$1',[tokenHash]).catch(()=>{});
@@ -91,10 +91,10 @@ function setupAuthSupport(app) {
   });
   app.post('/api/admin/test-email',user,admin,origin,async(req,res)=>{
     const missing=[];if(!process.env.BREVO_API_KEY)missing.push('BREVO_API_KEY');if(!process.env.MAIL_FROM)missing.push('MAIL_FROM');
-    if(!mailer.isConfigured())return res.status(400).json({error:'Render Environment me ye variable nahi mile: '+(missing.join(', ')||'RESEND_*')+'. Dono save karke deploy Live hone do.'});
-    if(!baseUrl())return res.status(400).json({error:'Site ka address nahi mila. Render me APP_BASE_URL = https://vidora-ai-kvp3.onrender.com jodo.'});
+    if(!mailer.isConfigured())return res.status(400).json({error:'These variables are missing in Render Environment: '+(missing.join(', ')||'RESEND_*')+'. Save both and wait for the deploy to go Live.'});
+    if(!baseUrl())return res.status(400).json({error:'The site address is not known. Add APP_BASE_URL = https://vidora-ai-kvp3.onrender.com in Render.'});
     const to=String(process.env.ADMIN_EMAIL).trim().toLowerCase();
-    try{const r=await mailer.sendMail({to,subject:'Vidora AI test email',html:'<p>Ye Vidora AI ka test email hai. Agar ye mil gaya to Forgot password ka email bhi chalega.</p>',text:'Vidora AI test email. Forgot password ka email bhi chalega.'});res.json({ok:true,provider:r.provider,to});}
+    try{const r=await mailer.sendMail({to,subject:'Vidora AI test email',html:'<p>This is a Vidora AI test email. If you received it, the Forgot password email will work too.</p>',text:'Vidora AI test email. The Forgot password email will work too.'});res.json({ok:true,provider:r.provider,to});}
     catch(e){res.status(502).json({error:e.message});}
   });
   app.post('/api/admin/users/:id/reset-link',user,admin,origin,async(req,res,next)=>{try{
