@@ -145,7 +145,14 @@
     const yn = v => v ? 'Connected ✓' : 'Not set';
     const cells = [['Uptime', uptime(s.uptimeSeconds)], ['Memory used', s.rssMB + ' MB' + (s.memoryLimitMB ? ' / ' + s.memoryLimitMB + ' MB' : '')], ['Active jobs now', String(s.activeJobs)], ['Files waiting', String(s.heldUploads)], ['Low-resource mode', s.lowResource ? 'ON' : 'off'], ['Max video length', s.maxVideoSeconds + ' s'],
       ['Visual Change', s.providers.visualChange], ['Photo AI (Space)', yn(s.providers.photoAI)], ['Video Enhance AI', yn(s.providers.videoEnhanceAI)], ['Gemini', yn(s.providers.gemini)], ['Reset e-mail', yn(s.providers.resetEmail)], ['Node', s.node]];
-    return h('section', { class: 'adm-card' }, h('h2', { text: 'Server health' }), h('p', { class: 'hint', text: 'Memory limit ke kareeb ho to Render crash/502 deta hai.' }), h('div', { class: 'sys' }, cells.map(([a, b]) => h('div', null, a, h('b', { text: b })))));
+    const result = h('p', { class: 'hint', text: state.mailTest || '' });
+    const btn = h('button', { class: 'outline-btn', type: 'button', text: '✉ Test email bhejo (apne admin email par)', onclick: async () => {
+      btn.disabled = true; result.textContent = 'Bhej raha hoon…';
+      try { const r = await api('/api/admin/test-email', { method: 'POST' }); state.mailTest = '✓ Email chala gaya (' + r.provider + ') → ' + r.to + '. Inbox/Spam dekho.'; }
+      catch (e) { state.mailTest = '✗ ' + e.message; }
+      result.textContent = state.mailTest; btn.disabled = false;
+    } });
+    return h('section', { class: 'adm-card' }, h('h2', { text: 'Server health' }), h('p', { class: 'hint', text: 'Memory limit ke kareeb ho to Render crash/502 deta hai.' }), h('div', { class: 'sys' }, cells.map(([a, b]) => h('div', null, a, h('b', { text: b })))), btn, result);
   }
 
   const PROV = { gmail: 'Gmail', outlook: 'Outlook / Hotmail', yahoo: 'Yahoo', icloud: 'iCloud', other: 'Other email' };
