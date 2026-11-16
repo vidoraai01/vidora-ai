@@ -56,6 +56,14 @@ const LOOKS = {
     label: 'Cartoon',
     filters: ['smartblur=lr=2.5:ls=1.0:lt=12', "lutyuv=y='floor(val/28)*28+14'", 'eq=saturation=1.6:contrast=1.12', 'unsharp=5:5:0.8:5:5:0']
   },
+  'look-cartoon2d': {
+    label: '2D cartoon',
+    filters: ['bilateral=sigmaS=6:sigmaR=0.12', 'bilateral=sigmaS=6:sigmaR=0.12', "lutyuv=y='floor(val/32)*32+16'", 'eq=saturation=1.7:contrast=1.15', 'unsharp=5:5:1.2:5:5:0']
+  },
+  'look-cartoon3d': {
+    label: '3D cartoon',
+    filters: ['bilateral=sigmaS=8:sigmaR=0.2', 'bilateral=sigmaS=8:sigmaR=0.2', 'eq=saturation=1.45:contrast=1.08:brightness=0.04:gamma=0.95', 'unsharp=5:5:0.6:5:5:0', 'vignette=PI/6']
+  },
   'look-anime': {
     label: 'Anime style',
     filters: ['smartblur=lr=2:ls=0.8:lt=8', "lutyuv=y='floor(val/20)*20+10'", 'eq=saturation=1.45:contrast=1.1:brightness=0.03', 'colorbalance=rs=0.03:bs=0.05:rh=0.04', 'unsharp=5:5:0.9:5:5:0']

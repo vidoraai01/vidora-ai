@@ -12,6 +12,7 @@ const { spawn } = require('child_process');
 const { GoogleGenAI } = require('@google/genai');
 const { transformVideoWithRunway, cancelRunwayTask, MAX_RUNWAY_INPUT_BYTES, MAX_RUNWAY_DURATION_SECONDS } = require('./runway-video-provider');
 const { visualStyleFilters, createAutoEditRenderer } = require('./auto-edit-renderer');
+const { geminiImage, PROMPTS: GEMINI_IMAGE_PROMPTS } = require('./gemini-image');
 const { photoUltraFilters, enhanceVideoFilters, voiceCleanFilters, isLocalLook, lookFilters, fallbackLookFor } = require('./free-effects');
 const { transformVideoWithFreeProvider, transformWithGradio, isConfigured: gradioConfigured } = require('./free-video-provider');
 // Visual Change provider: free open-source Gradio/Hugging Face Space first, Runway (paid) only if configured.
@@ -577,6 +578,41 @@ app.post('/api/video-fingerprint', requireSession, trackFinish('video-fingerprin
   finally{if(files.referenceVideo?.[0])safeDelete(files.referenceVideo[0].path);safeDelete(check.path);if(storedId)removeUpload(storedId);}
 });
 
+
+// Gemini image edit (enhance / 2D / 3D cartoon): downscale -> Gemini -> convert to PNG (optionally upscale + sharpen).
+async function geminiPhotoJob({source,output,kind,upscale}){
+  const prepared=path.join(OUT_DIR,`${crypto.randomUUID()}.gi-in.png`),raw=path.join(OUT_DIR,`${crypto.randomUUID()}.gi-out.bin`);
+  try{
+    await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',source.path,'-frames:v','1','-vf','scale=min(1536\\,iw):min(1536\\,ih):force_original_aspect_ratio=decrease:flags=lanczos,format=rgb24',prepared],60000);
+    fs.writeFileSync(raw,await geminiImage({imagePath:prepared,prompt:GEMINI_IMAGE_PROMPTS[kind],timeoutMs:Math.max(30000,Number(process.env.GEMINI_IMAGE_TIMEOUT_MS)||90000)}));
+    const vf=upscale?`scale='if(gte(iw,ih),min(iw*${upscale},2560),-2)':'if(gte(iw,ih),-2,min(ih*${upscale},2560))':flags=lanczos,unsharp=5:5:0.5:5:5:0,eq=contrast=1.02`:'format=rgb24';
+    await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1','-vf',vf,output],120000);
+  }finally{safeDelete(prepared);safeDelete(raw);}
+}
+const geminiImageOn=()=>Boolean(process.env.GEMINI_API_KEY);
+
+app.post('/api/photo-cartoon', requireSession, trackFinish('photo-cartoon','job'), mediaJobLimit, photoUpload.single('media'), async(req,res)=>{
+  let source=req.file,storedId=null;if(!source&&req.body.uploadId){const stored=ownedUpload(req,req.body.uploadId,'photo');if(!stored)return res.status(404).json({error:'Uploaded photo not found or expired.'});source=stored.file;storedId=stored.record.id;}
+  if(!source)return res.status(400).json({error:'Choose one photo first.'});
+  const style=String(req.body.cartoonStyle)==='3d'?'3d':'2d';
+  const output=path.join(OUT_DIR,`${crypto.randomUUID()}.png`);
+  try{
+    await validateMedia(source,'photo',0);
+    let mode='cartoon-gemini';
+    try{
+      if(!geminiImageOn())throw new Error('GEMINI_API_KEY is not set.');
+      await geminiPhotoJob({source,output,kind:style==='3d'?'cartoon3d':'cartoon2d'});
+    }catch(e){
+      console.warn('[Vidora Cartoon] Gemini failed; using FFmpeg cartoon look:',e.message);safeDelete(output);mode='cartoon-local';
+      const look=lookFilters(style==='3d'?'look-cartoon3d':'look-cartoon2d');
+      await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',source.path,'-frames:v','1','-vf',['scale=min(1600\\,iw):min(1600\\,ih):force_original_aspect_ratio=decrease:flags=lanczos','format=rgb24',...look].join(','),output],120000);
+    }
+    res.setHeader('X-Vidora-AI-Mode',mode);res.setHeader('X-Vidora-AI-Confidence','1');
+    res.download(output,`vidora-cartoon-${style}.png`,()=>safeDelete(output));
+  }catch(e){safeDelete(output);res.status(400).json({error:e.message||'Cartoon conversion failed.'});}
+  finally{if(req.file)safeDelete(req.file.path);if(storedId)removeUpload(storedId);}
+});
+
 app.post('/api/photo-enhance', requireSession, trackFinish('photo-enhance','job'), mediaJobLimit, photoUpload.single('media'), async(req,res)=>{
   let source=req.file,storedId=null;if(!source&&req.body.uploadId){const stored=ownedUpload(req,req.body.uploadId,'photo');if(!stored)return res.status(404).json({error:'Uploaded photo not found or expired.'});source=stored.file;storedId=stored.record.id;}
   if(!source)return res.status(400).json({error:'Choose one photo first.'});
@@ -599,6 +635,10 @@ app.post('/api/photo-enhance', requireSession, trackFinish('photo-enhance','job'
         return res.download(output,'vidora-photo-enhanced.png',()=>safeDelete(output));
       }catch(e){console.warn('[Vidora Photo] Neural photo enhancement failed; using local filters:',e.message);safeDelete(output);}
       finally{safeDelete(prepared);safeDelete(raw);}
+    }
+    if(geminiImageOn()&&String(process.env.PHOTO_GEMINI_ENHANCE||'on').toLowerCase()!=='off'){
+      try{await geminiPhotoJob({source,output,kind:'enhance',upscale:2});res.setHeader('X-Vidora-AI-Mode','gemini-image');res.setHeader('X-Vidora-AI-Confidence','1');return res.download(output,'vidora-photo-enhanced.png',()=>safeDelete(output));}
+      catch(e){console.warn('[Vidora Photo] Gemini image enhance failed; using local filters:',e.message);safeDelete(output);}
     }
     let settings={sharpness:0.9,denoise:1.2,brightness:0,contrast:1.08,saturation:1.1,noEnhancementNeeded:false};
     if(geminiAI&&String(process.env.PHOTO_USE_GEMINI)==='true'){
@@ -631,7 +671,8 @@ app.post('/api/photo-bgremove', requireSession, trackFinish('photo-bgremove','jo
   let source=req.file,storedId=null;if(!source&&req.body.uploadId){const stored=ownedUpload(req,req.body.uploadId,'photo');if(!stored)return res.status(404).json({error:'Uploaded photo not found or expired.'});source=stored.file;storedId=stored.record.id;}
   if(!source)return res.status(400).json({error:'Choose one photo first.'});
   const output=path.join(OUT_DIR,`${crypto.randomUUID()}.png`);
-  const greenFill=String(req.body.bgFill||'green')!=='transparent';
+  const removeSubject=String(req.body.bgMode||'background')==='subject';
+  const greenFill=String(req.body.bgFill||'green')!=='transparent',keepBackground=String(req.body.bgMode||'background')==='subject';
   const fillGreen=async()=>{if(!greenFill)return;const g=output+'.g.png';await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',output,'-frames:v','1','-filter_complex','color=c=0x00B140:s=2x2[b];[b][0:v]scale2ref[bg][fg];[bg][fg]overlay=format=auto,format=rgb24',g],60000);fs.renameSync(g,output);};
   try{
     await validateMedia(source,'photo',0);
@@ -641,18 +682,19 @@ app.post('/api/photo-bgremove', requireSession, trackFinish('photo-bgremove','jo
       try{
         await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',source.path,'-frames:v','1','-vf','scale=min(1536\\,iw):min(1536\\,ih):force_original_aspect_ratio=decrease:flags=lanczos,format=rgb24',prepared],60000);
         await transformWithGradio({prefix:'BGRM',inputPath:prepared,outputPath:raw,mime:'image/png',maxWaitMs:Math.max(30000,Number(process.env.BGRM_MAX_WAIT_MS)||90000),label:'free background AI server'});
-        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1','-vf','format=rgba',output],60000);
+        if(removeSubject)await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',prepared,'-i',raw,'-frames:v','1','-filter_complex','[1:v]format=rgba,alphaextract[a];[a][0:v]scale2ref[a2][i];[a2]negate[m];[i]format=rgba[i2];[i2][m]alphamerge','-compression_level','6',output],60000);
+        else await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1','-vf','format=rgba',output],60000);
         await fillGreen();
         res.setHeader('X-Vidora-AI-Mode','bg-ai-space');res.setHeader('X-Vidora-AI-Confidence','1');
-        return res.download(output,'vidora-background-removed.png',()=>safeDelete(output));
+        return res.download(output,(removeSubject?'vidora-subject-removed.png':'vidora-background-removed.png'),()=>safeDelete(output));
       }catch(e){console.warn('[Vidora BG] AI Space failed; using local method:',e.message);safeDelete(output);}
       finally{safeDelete(prepared);safeDelete(raw);}
     }
     const maxSide=Number(process.env.BGREMOVE_MAX_SIDE)||(LOW_RESOURCE?1600:2048);
-    await removePhotoBackground({ffmpeg:FFMPEG,input:source.path,output,maxSide,tolerance:String(req.body.bgStrength||'medium')});
+    await removePhotoBackground({ffmpeg:FFMPEG,input:source.path,output,maxSide,tolerance:'medium',invert:removeSubject});
     await fillGreen();
     res.setHeader('X-Vidora-AI-Mode','bg-local');res.setHeader('X-Vidora-AI-Confidence','1');
-    res.download(output,'vidora-background-removed.png',()=>safeDelete(output));
+    res.download(output,(removeSubject?'vidora-subject-removed.png':'vidora-background-removed.png'),()=>safeDelete(output));
   }catch(e){safeDelete(output);res.status(400).json({error:e.message||'Background removal failed.'});}
   finally{if(req.file)safeDelete(req.file.path);if(storedId)removeUpload(storedId);}
 });
