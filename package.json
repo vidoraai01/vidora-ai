@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check auth-support.js && node --check public/assets/app.js && node --check public/assets/admin.js && node --check runway-video-provider.js && node --check auto-edit-renderer.js && node --check free-video-provider.js && node --check free-effects.js && node --check analytics.js && node --check mailer.js",
+    "check": "node --check server.js && node --check auth-support.js && node --check public/assets/app.js && node --check public/assets/admin.js && node --check runway-video-provider.js && node --check auto-edit-renderer.js && node --check free-video-provider.js && node --check free-effects.js && node --check analytics.js && node --check mailer.js && node --check bgremove.js && node --check share.js && node --check support.js",
     "test": "node --test"
   },
   "engines": {

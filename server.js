@@ -20,6 +20,7 @@ const FREE_MAX_SECONDS=Math.max(1,Math.min(30,Number(process.env.HF_MAX_SECONDS)
 
 const geminiAI = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY, httpOptions: { apiVersion: 'v1beta', timeout: 180000, retryOptions: { attempts: 1 } } }) : null;
 const app = express();
+const { removeBackground: removePhotoBackground } = require('./bgremove');
 const { setupAuthSupport } = require('./auth-support');
 const PORT = Number(process.env.PORT || 3000);
 const configuredUploadLimit = Number(process.env.MAX_UPLOAD_MB || 250);
@@ -409,7 +410,7 @@ app.locals.systemInfo = () => ({
   uptimeSeconds: Math.round(process.uptime()), rssMB: Math.round(process.memoryUsage().rss / 1048576), node: process.version,
   lowResource: LOW_RESOURCE, maxVideoSeconds: MAX_VIDEO_SECONDS, memoryLimitMB: detectedMemoryLimitMB(),
   activeJobs: [...jobs.values()].filter(j => j.status === 'processing').length, heldUploads: uploads.size,
-  providers: { visualChange: visualProviderName() || 'none (instant looks only)', photoAI: gradioConfigured('PHOTO'), videoEnhanceAI: gradioConfigured('VENH'), gemini: Boolean(geminiAI), resetEmail: require('./mailer').isConfigured() }
+  providers: { bgAI: gradioConfigured('BGRM'), visualChange: visualProviderName() || 'none (instant looks only)', photoAI: gradioConfigured('PHOTO'), videoEnhanceAI: gradioConfigured('VENH'), gemini: Boolean(geminiAI), resetEmail: require('./mailer').isConfigured() }
 });
 if (LOW_RESOURCE) { process.env.X264_PRESET = 'veryfast'; console.log('[Vidora] Low-resource mode: veryfast preset, 720p cap, MAX_VIDEO_SECONDS=' + MAX_VIDEO_SECONDS); }
 function buildArgs(input, output, body, info) {
@@ -624,6 +625,32 @@ app.post('/api/photo-enhance', requireSession, trackFinish('photo-enhance','job'
     res.download(output,'vidora-photo-enhanced.png',()=>safeDelete(output));
   }catch(e){safeDelete(output);res.status(400).json({error:e.message||'Photo enhancement failed.'});}
   finally{if(req.file)safeDelete(req.file.path);if(storedId)removeUpload(storedId);if(workDir)fs.rm(workDir,{recursive:true,force:true},()=>{});}
+});
+
+app.post('/api/photo-bgremove', requireSession, trackFinish('photo-bgremove','job'), mediaJobLimit, photoUpload.single('media'), async(req,res)=>{
+  let source=req.file,storedId=null;if(!source&&req.body.uploadId){const stored=ownedUpload(req,req.body.uploadId,'photo');if(!stored)return res.status(404).json({error:'Uploaded photo not found or expired.'});source=stored.file;storedId=stored.record.id;}
+  if(!source)return res.status(400).json({error:'Choose one photo first.'});
+  const output=path.join(OUT_DIR,`${crypto.randomUUID()}.png`);
+  try{
+    await validateMedia(source,'photo',0);
+    if(gradioConfigured('BGRM')){
+      // Optional free AI model (e.g. a Hugging Face background-removal Space) – best for busy backgrounds. Falls back to the local method.
+      const prepared=path.join(OUT_DIR,`${crypto.randomUUID()}.bg-in.png`),raw=path.join(OUT_DIR,`${crypto.randomUUID()}.bg-out.bin`);
+      try{
+        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',source.path,'-frames:v','1','-vf','scale=min(1536\\,iw):min(1536\\,ih):force_original_aspect_ratio=decrease:flags=lanczos,format=rgb24',prepared],60000);
+        await transformWithGradio({prefix:'BGRM',inputPath:prepared,outputPath:raw,mime:'image/png',maxWaitMs:Math.max(30000,Number(process.env.BGRM_MAX_WAIT_MS)||90000),label:'free background AI server'});
+        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1','-vf','format=rgba',output],60000);
+        res.setHeader('X-Vidora-AI-Mode','bg-ai-space');res.setHeader('X-Vidora-AI-Confidence','1');
+        return res.download(output,'vidora-background-removed.png',()=>safeDelete(output));
+      }catch(e){console.warn('[Vidora BG] AI Space failed; using local method:',e.message);safeDelete(output);}
+      finally{safeDelete(prepared);safeDelete(raw);}
+    }
+    const maxSide=Number(process.env.BGREMOVE_MAX_SIDE)||(LOW_RESOURCE?1600:2048);
+    await removePhotoBackground({ffmpeg:FFMPEG,input:source.path,output,maxSide,tolerance:String(req.body.bgStrength||'medium')});
+    res.setHeader('X-Vidora-AI-Mode','bg-local');res.setHeader('X-Vidora-AI-Confidence','1');
+    res.download(output,'vidora-background-removed.png',()=>safeDelete(output));
+  }catch(e){safeDelete(output);res.status(400).json({error:e.message||'Background removal failed.'});}
+  finally{if(req.file)safeDelete(req.file.path);if(storedId)removeUpload(storedId);}
 });
 
 app.post('/api/media-details', requireSession, trackFinish('media-details','analysis'), analysisLimit, upload.single('media'), async(req,res)=>{
