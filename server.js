@@ -648,7 +648,7 @@ app.post('/api/photo-enhance', requireSession, trackFinish('photo-enhance','job'
         const origLong=Math.max(Number(srcVideo.width)||0,Number(srcVideo.height)||0)||1024;
         const maxSide=Number(process.env.PHOTO_MAX_SIDE)||(LOW_RESOURCE?2048:2560);
         const target=Math.max(512,Math.min(maxSide,origLong*2));
-        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1','-vf',`crop=iw:trunc(ih*0.985/2)*2:0:0,hqdn3d=2.5:2.5:0:0,scale='if(gte(iw,ih),${target},-2)':'if(gte(iw,ih),-2,${target})':flags=lanczos,unsharp=5:5:${(0.9*PS()).toFixed(2)}:5:5:0,unsharp=11:11:${(0.45*PS()).toFixed(2)}:11:11:0,cas=strength=${Math.min(1,0.35*PS()).toFixed(2)},eq=contrast=1.03`,output],120000);
+        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1','-vf',`crop=iw:trunc(ih*0.985/2)*2:0:0,hqdn3d=2.5:2.5:0:0,scale='if(gte(iw,ih),${target},-2)':'if(gte(iw,ih),-2,${target})':flags=lanczos,unsharp=5:5:${(0.9*PS()).toFixed(2)}:5:5:0,unsharp=11:11:${(0.45*PS()).toFixed(2)}:11:11:0,cas=strength=${Math.min(1,0.35*PS()).toFixed(2)},normalize=blackpt=black:whitept=white:smoothing=0:independence=0:strength=0.35,eq=gamma=1.07:brightness=0.02:contrast=1.04:saturation=1.05`,output],120000);
         res.setHeader('X-Vidora-AI-Mode','neural-gradio');res.setHeader('X-Vidora-AI-Confidence','1');
         return res.download(output,'vidora-photo-enhanced.png',()=>safeDelete(output));
       }catch(e){console.warn('[Vidora Photo] Neural photo enhancement failed; using local filters:',e.message);safeDelete(output);}
