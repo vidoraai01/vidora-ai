@@ -589,6 +589,7 @@ async function geminiPhotoJob({source,output,kind,upscale}){
     await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1','-vf',vf,output],120000);
   }finally{safeDelete(prepared);safeDelete(raw);}
 }
+const PS=()=>Math.max(0.3,Math.min(2.5,Number(process.env.PHOTO_SHARPNESS)||1));
 const geminiImageOn=()=>Boolean(process.env.GEMINI_API_KEY);
 
 app.post('/api/photo-cartoon', requireSession, trackFinish('photo-cartoon','job'), mediaJobLimit, photoUpload.single('media'), async(req,res)=>{
@@ -637,16 +638,17 @@ app.post('/api/photo-enhance', requireSession, trackFinish('photo-enhance','job'
     const photoInfo=await validateMedia(source,'photo',0);
     if(String(process.env.PHOTO_NEURAL||'').toLowerCase()!=='off'&&gradioConfigured('PHOTO')){
       // Neural enhancement through a free Gradio/Hugging Face Space. Any failure falls back to the local filters below.
+      const spaceSide=Math.max(256,Math.min(1536,Number(process.env.PHOTO_SPACE_MAX_SIDE)||1024));
       const prepared=path.join(OUT_DIR,`${crypto.randomUUID()}.photo-in.png`),raw=path.join(OUT_DIR,`${crypto.randomUUID()}.photo-out.bin`);
       try{
-        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',source.path,'-frames:v','1','-vf','scale=min(1024\\,iw):min(1024\\,ih):force_original_aspect_ratio=decrease:flags=lanczos,format=rgb24',prepared],60000);
+        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',source.path,'-frames:v','1','-vf',`scale=min(${spaceSide}\\,iw):min(${spaceSide}\\,ih):force_original_aspect_ratio=decrease:flags=lanczos,format=rgb24`,prepared],60000);
         await transformWithGradio({prefix:'PHOTO',inputPath:prepared,outputPath:raw,mime:'image/png',maxWaitMs:Math.max(30000,Number(process.env.PHOTO_MAX_WAIT_MS)||90000),label:'free photo AI server'});
         // The AI step runs at <=1024 px. Bring the result back up to (at least) full size and finish with a detail sharpen.
         const srcVideo=(photoInfo.streams||[]).find(x=>x.codec_type==='video')||{};
         const origLong=Math.max(Number(srcVideo.width)||0,Number(srcVideo.height)||0)||1024;
         const maxSide=Number(process.env.PHOTO_MAX_SIDE)||(LOW_RESOURCE?2048:2560);
         const target=Math.max(512,Math.min(maxSide,origLong*2));
-        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1','-vf',`scale='if(gte(iw,ih),${target},-2)':'if(gte(iw,ih),-2,${target})':flags=lanczos,unsharp=5:5:${(0.55*Math.max(0.3,Math.min(2.5,Number(process.env.PHOTO_SHARPNESS)||1))).toFixed(2)}:5:5:0,cas=strength=${Math.min(1,0.22*Math.max(0.3,Math.min(2.5,Number(process.env.PHOTO_SHARPNESS)||1))).toFixed(2)},eq=contrast=1.02`,output],120000);
+        await run(FFMPEG,['-hide_banner','-loglevel','error','-y','-i',raw,'-frames:v','1','-vf',`scale='if(gte(iw,ih),${target},-2)':'if(gte(iw,ih),-2,${target})':flags=lanczos,unsharp=5:5:${(0.9*PS()).toFixed(2)}:5:5:0,unsharp=11:11:${(0.45*PS()).toFixed(2)}:11:11:0,cas=strength=${Math.min(1,0.35*PS()).toFixed(2)},eq=contrast=1.03`,output],120000);
         res.setHeader('X-Vidora-AI-Mode','neural-gradio');res.setHeader('X-Vidora-AI-Confidence','1');
         return res.download(output,'vidora-photo-enhanced.png',()=>safeDelete(output));
       }catch(e){console.warn('[Vidora Photo] Neural photo enhancement failed; using local filters:',e.message);safeDelete(output);}
