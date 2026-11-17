@@ -35,7 +35,7 @@ function photoUltraFilters(maxSide = 2560) {
     cap: `scale=w='min(iw,${max})':h='min(ih,${max})':force_original_aspect_ratio=decrease:flags=lanczos`,
     pre: ['hqdn3d=2.5:2.5:0:0', 'normalize=blackpt=black:whitept=white:smoothing=0:independence=0:strength=0.5', "curves=all='0/0 0.25/0.29 0.5/0.53 0.75/0.77 1/1'"],
     up: `scale='if(gte(iw,ih),min(iw*2,${max}),-2)':'if(gte(iw,ih),-2,min(ih*2,${max}))':flags=lanczos`,
-    post: ['unsharp=7:7:1.0:7:7:0', 'cas=strength=0.5', 'eq=contrast=1.04:saturation=1.04']
+    post: ['unsharp=5:5:0.45:5:5:0', 'cas=strength=0.2', 'eq=contrast=1.04:saturation=1.04']
   };
 }
 
