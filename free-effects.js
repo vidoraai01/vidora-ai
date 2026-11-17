@@ -31,11 +31,13 @@ function enhanceVideoFilters({ sharpness = 0, denoise = 0, brightness = 0, contr
 // auto-levels (no colour cast), shadow lift, 2x Lanczos upscale, then luma sharpen + adaptive sharpen.
 function photoUltraFilters(maxSide = 2560) {
   const max = Math.max(512, Math.min(4096, Math.round(Number(maxSide) || 2560)));
+  // PHOTO_SHARPNESS: 1 = default, 1.2 = 20% sharper, 0.8 = 20% softer.
+  const sharp = Math.max(0.3, Math.min(2.5, Number(process.env.PHOTO_SHARPNESS) || 1));
   return {
     cap: `scale=w='min(iw,${max})':h='min(ih,${max})':force_original_aspect_ratio=decrease:flags=lanczos`,
     pre: ['hqdn3d=2.5:2.5:0:0', 'normalize=blackpt=black:whitept=white:smoothing=0:independence=0:strength=0.5', "curves=all='0/0 0.25/0.29 0.5/0.53 0.75/0.77 1/1'"],
     up: `scale='if(gte(iw,ih),min(iw*2,${max}),-2)':'if(gte(iw,ih),-2,min(ih*2,${max}))':flags=lanczos`,
-    post: ['unsharp=5:5:0.45:5:5:0', 'cas=strength=0.2', 'eq=contrast=1.04:saturation=1.04']
+    post: [`unsharp=5:5:${(0.65 * sharp).toFixed(2)}:5:5:0`, `cas=strength=${Math.min(1, 0.3 * sharp).toFixed(2)}`, 'eq=contrast=1.04:saturation=1.04']
   };
 }
 
